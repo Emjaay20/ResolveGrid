@@ -38,8 +38,8 @@
 - [`packages/shared`](./packages/shared): Canonical NIPOST 5-segment parser/assembler (`AA-99-H77-BB-55`), 36-State + FCT Legacy 6-Digit Postal Zone Bridge, Haversine & H3 spatial indexers.
 - [`apps/api`](./apps/api): Node.js + TypeScript Core API, Official NIPOST Client (`https://api.postcode.gov.ng`), Circuit Breaker, Redis `GEOSEARCH`, Redlock (`SETNX`), OSRM + Open-Meteo + OpenSky live telemetry, and HMAC-SHA256 KYC Proof-of-Location Pass signer.
 - [`apps/ml-engine`](./apps/ml-engine): Python FastAPI service running the Multi-Provider LLM Tool-Calling NIPOST Agent and the Hybrid Champion (LightGBM) + Challenger (Online River) ETA engine.
-- [`apps/web`](./apps/web): Next.js 15 App Router dark-mode engineering console with interactive H3 vector radar map, live Agent Tool-Call Trace, Self-Grading Ground-Truth Ledger, Golden Nigerian Address Benchmark (`/evals`), and Banking/KYC Verifier.
-- [`apps/mobile`](./apps/mobile): React Native (Expo) Field Companion App (`expo-location`) for real hardware GPS building verification, KYC check-in passes, live courier geofence telemetry, and crowdsourced estate gate delay logging.
+- [`apps/web`](./apps/web): Next.js 15 operations console for source-aware address resolution, dispatch, field-evidence review, quality checks, and KYC verification.
+- [`apps/mobile`](./apps/mobile): React Native (Expo) field companion for provisioned agents to resolve a visit, capture consented device GPS and access observations, and retry a failed submission before leaving the app.
 - [`infra/mysql/init.sql`](./infra/mysql/init.sql) & [`infra/nginx/aetherhost.conf`](./infra/nginx/aetherhost.conf): Production MySQL 8.0 schema and Nginx reverse-proxy configuration for `aetherhost.com.ng`.
 
 ---
@@ -82,3 +82,11 @@ For an existing MySQL database, apply
 [`infra/mysql/migrations/001_field_observations.sql`](./infra/mysql/migrations/001_field_observations.sql)
 and [`infra/mysql/migrations/002_field_agents.sql`](./infra/mysql/migrations/002_field_agents.sql)
 before deploying this version. Fresh Docker databases receive the same tables from `init.sql`.
+
+### Mobile release configuration
+
+Before making an Android or iOS build, copy [`apps/mobile/.env.example`](./apps/mobile/.env.example)
+to `apps/mobile/.env` and set `EXPO_PUBLIC_API_URL` to the HTTPS address of the deployed
+ResolveGrid service. This is a public client setting, not a place for NIPOST or field-agent
+server secrets. The current retry queue is deliberately session-only; a durable encrypted
+offline queue is the next mobile hardening step.
