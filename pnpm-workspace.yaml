@@ -3,5 +3,5 @@ packages:
   - "apps/*"
 
 # Required by the web toolchain during a clean container build.
-onlyBuiltDependencies:
-  - esbuild
+allowBuilds:
+  esbuild: true
