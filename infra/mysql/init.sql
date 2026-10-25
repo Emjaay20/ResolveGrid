@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS field_agents (
 -- Seed Multi-Tenant Industry Profiles
 -- ============================================================================
 INSERT IGNORE INTO tenants (id, name, industry_vertical, max_search_radius_m, required_lookup_level, sla_target_sec, ml_profile) VALUES
-('tenant_logistics_ng', 'Chowdeck / Last-Mile Express NG', 'LOGISTICS', 6000, 3, 1800, 'logistics_eta_v1'),
+('tenant_logistics_ng', 'Partner Delivery Network', 'LOGISTICS', 6000, 3, 1800, 'logistics_eta_v1'),
 ('tenant_fintech_kyc', 'Moniepoint / Tier-3 Merchant KYC', 'BANKING_KYC', 3000, 3, 900, 'kyc_verification_v1'),
 ('tenant_emergency_fct', 'FCT NEMA / Rapid Medical Dispatch', 'EMERGENCY_RESPONSE', 10000, 3, 600, 'emergency_intercept_v1'),
 ('tenant_field_infra', 'IHS Towers / Fiber Grid Maintenance', 'FIELD_OPS', 15000, 3, 3600, 'field_mttr_v1');

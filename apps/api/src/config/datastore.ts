@@ -762,7 +762,7 @@ export const INITIAL_AGENTS: AgentRecord[] = [
 export const TENANT_PROFILES: Record<string, TenantProfile> = {
   tenant_logistics_ng: {
     id: 'tenant_logistics_ng',
-    name: 'Chowdeck / Last-Mile Express NG',
+    name: 'Partner Delivery Network',
     industry_vertical: 'LOGISTICS',
     max_search_radius_m: 8000,
     required_lookup_level: 3,
