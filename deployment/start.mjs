@@ -29,7 +29,9 @@ start('python3', ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--por
 start('node', ['apps/api/dist/index.js'], {
   env: { PORT: process.env.API_PORT || '4000' },
 });
-const web = start('node', ['apps/web/node_modules/next/dist/bin/next', 'start', '--port', process.env.PORT || '3000']);
+const web = start('node', ['node_modules/next/dist/bin/next', 'start', '--port', process.env.PORT || '3000'], {
+  cwd: '/app/apps/web',
+});
 
 web.on('exit', (code) => {
   stopAll();
