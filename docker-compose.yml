@@ -1,0 +1,95 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: resolvegrid-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: resolvegrid_root_2026
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-resolvegrid}
+      MYSQL_USER: ${MYSQL_USER:-resolvegrid}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-resolvegrid_secret_2026}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./infra/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-presolvegrid_root_2026"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    container_name: resolvegrid-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ml-engine:
+    build:
+      context: ./apps/ml-engine
+      dockerfile: Dockerfile
+    container_name: resolvegrid-ml-engine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      API_BASE_URL: http://api:4000
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: ./apps/api/Dockerfile
+    container_name: resolvegrid-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_URL: redis://redis:6379
+      ML_ENGINE_URL: http://ml-engine:8000
+    ports:
+      - "4000:4000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml-engine:
+        condition: service_started
+
+  web:
+    build:
+      context: .
+      dockerfile: ./apps/web/Dockerfile
+    container_name: resolvegrid-web
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+      NEXT_PUBLIC_ML_URL: ${NEXT_PUBLIC_ML_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  mysql_data:
+  redis_data:

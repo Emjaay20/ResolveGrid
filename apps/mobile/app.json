@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "ResolveGrid Field",
+    "slug": "resolvegrid-field",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ng.com.aetherhost.resolvegrid",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "ResolveGrid uses high-accuracy hardware GPS to resolve building-level NIPOST postcodes and verify physical geofence arrivals."
+      }
+    },
+    "android": {
+      "package": "ng.com.aetherhost.resolvegrid",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
+    }
+  }
+}

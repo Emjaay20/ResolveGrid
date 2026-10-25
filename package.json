@@ -1,0 +1,23 @@
+{
+  "name": "resolvegrid",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ResolveGrid — Nigeria's Autonomous Address Intelligence, Last-Mile Dispatch & Ground-Truth Telemetry Engine powered by the Official NIPOST Digital Alphanumeric Postcode API",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r --filter ./packages/* --filter ./apps/api --filter ./apps/web build",
+    "dev:api": "pnpm --filter @resolvegrid/api dev",
+    "dev:web": "pnpm --filter @resolvegrid/web dev",
+    "dev:mobile": "pnpm --filter @resolvegrid/mobile start",
+    "dev:ml": "cd apps/ml-engine && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "test": "pnpm --filter @resolvegrid/shared test && pnpm --filter @resolvegrid/api test",
+    "docker:up": "docker compose up --build -d",
+    "docker:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
