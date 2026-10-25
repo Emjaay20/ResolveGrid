@@ -1230,7 +1230,7 @@ class DataStore {
     await this.mysqlPool.execute(
       `INSERT INTO field_agents (
         id, agent_id, email, display_name, password_hash, active, created_at, last_login_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)` ,
+      ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)` ,
       [
         account.id,
         account.agent_id,
@@ -1238,7 +1238,6 @@ class DataStore {
         account.display_name,
         account.password_hash,
         account.active,
-        account.created_at,
         account.last_login_at,
       ]
     );
