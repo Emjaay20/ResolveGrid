@@ -86,7 +86,7 @@ before deploying this version. Fresh Docker databases receive the same tables fr
 ### Mobile release configuration
 
 Before making an Android or iOS build, copy [`apps/mobile/.env.example`](./apps/mobile/.env.example)
-to `apps/mobile/.env` and set `EXPO_PUBLIC_API_URL` to the HTTPS address of the deployed
-ResolveGrid service. This is a public client setting, not a place for NIPOST or field-agent
+to `apps/mobile/.env` and set `EXPO_PUBLIC_API_URL` to the full HTTPS API address of the deployed
+ResolveGrid service (including its `/api` path). This is a public client setting, not a place for NIPOST or field-agent
 server secrets. The current retry queue is deliberately session-only; a durable encrypted
 offline queue is the next mobile hardening step.
