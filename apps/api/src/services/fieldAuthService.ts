@@ -89,7 +89,11 @@ export class FieldAuthService {
     }
     const email = params.email.trim().toLowerCase();
     if (store.fieldAgentByEmail.has(email)) throw new Error('A field agent already uses this email.');
-    if (!store.agentMap.has(params.agentId)) throw new Error('Provision a registered dispatch agent ID.');
+    // Field-evidence agents are provisioned identities, not necessarily dispatch
+    // couriers. Requiring them to reuse a live dispatch record would tie a person
+    // to a fixture or another operator's vehicle before they can use the mobile
+    // app. Their agent ID remains stable and is carried by their signed session
+    // and append-only observations.
     if (params.password.length < 12 || params.password.length > 128) {
       throw new Error('Field-agent passwords must be 12–128 characters.');
     }
