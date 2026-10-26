@@ -5,10 +5,11 @@ dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { nipostClient } from './clients/nipostClient';
+import { store } from './config/datastore';
 import { dispatchService } from './services/dispatchService';
 import { verificationService } from './services/verificationService';
 
-test('nipostClient resolves official NIPOST sandbox & Abuja postcodes with L3 attributes', async () => {
+test('nipostClient resolves deterministic postcode fixtures with L3 attributes', async () => {
   const ekiti = await nipostClient.lookupPostcode('EK-01-A03-FK-01', 3);
   assert.ok(ekiti);
   assert.equal(ekiti.postcode, 'EK-01-A03-FK-01');
@@ -61,4 +62,37 @@ test('dispatchService resolves messy Nigerian landmarks and dispatches with idem
   assert.ok(verified);
   assert.equal(verified.task.status, 'ARRIVED_VERIFIED');
   assert.equal(verified.task.residual_error_sec, 9);
+});
+
+test('provisioned field identities pass the field-agent check before source validation', async () => {
+  const accountId = 'fa_test_field_identity';
+  const agentId = 'field_test_identity';
+  store.fieldAgentById.set(accountId, {
+    id: accountId,
+    agent_id: agentId,
+    email: 'field-test@example.com',
+    display_name: 'Field Test',
+    password_hash: 'not-used-in-this-test',
+    active: true,
+    created_at: new Date().toISOString(),
+    last_login_at: null,
+  });
+
+  try {
+    const result = await verificationService.submitFieldObservation({
+      agentId,
+      postcode: 'FC-02-A09-DB-09',
+      latitude: 9.07874,
+      longitude: 7.47018,
+      gpsAccuracyM: 8,
+      gateClearanceRequired: false,
+      measuredGateDelaySec: 20,
+      compoundWalkMeters: 15,
+    });
+
+    assert.equal(result.accepted, false);
+    if (!result.accepted) assert.match(result.error, /local development fixture/i);
+  } finally {
+    store.fieldAgentById.delete(accountId);
+  }
 });

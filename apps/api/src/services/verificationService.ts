@@ -16,7 +16,7 @@ export class VerificationService {
   /**
    * Records physical ground-truth arrival at the target NIPOST building geofence,
    * computes residual error (Actual - Predicted), updates Last-50m Gate Delay,
-   * and triggers Online Incremental Learning (River) in FastAPI.
+   * and triggers the online residual learner in FastAPI.
    */
   public async verifyTaskArrivalAndLearn(params: {
     taskId: string;
@@ -64,7 +64,7 @@ export class VerificationService {
       store.postcodeMap.set(task.resolved_postcode, postcodeEntry);
     }
 
-    // Trigger FastAPI Online River Learner (POST /v1/ml/learn)
+    // Trigger the FastAPI online residual learner (POST /v1/ml/learn)
     let onlineLearnResult: Record<string, unknown> = {
       updated: true,
       mode: 'local_online_mirror',
@@ -189,9 +189,15 @@ export class VerificationService {
     | { accepted: true; observation: FieldObservationRecord; postcode_source: string }
     | { accepted: false; error: string }
   > {
-    const agent = store.agentMap.get(params.agentId);
-    if (!agent) {
-      return { accepted: false, error: 'Unknown field agent. Provision the agent before submitting observations.' };
+    const isDispatchAgent = store.agentMap.has(params.agentId);
+    const isProvisionedFieldAgent = Array.from(store.fieldAgentById.values()).some(
+      (account) => account.active && account.agent_id === params.agentId
+    );
+    if (!isDispatchAgent && !isProvisionedFieldAgent) {
+      return {
+        accepted: false,
+        error: 'Unknown field identity. Sign in with a provisioned field account before submitting observations.',
+      };
     }
 
     const postcode = await nipostClient.lookupPostcode(params.postcode, 3, params.overrideNipostKey);

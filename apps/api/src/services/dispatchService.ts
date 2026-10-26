@@ -190,7 +190,8 @@ export class DispatchService {
 
   /**
    * Executes the 2-Stage "Filter & Rank" Dispatch Pipeline with Idempotency,
-   * OSRM Road Routing, Open-Meteo Weather, LightGBM + Online River Scoring, and Redlock.
+   * OSRM road routing, Open-Meteo weather, an explainable ETA baseline with online
+   * residual correction, and a Redis-backed dispatch lock.
    */
   public async dispatchTask(params: {
     idempotencyKey: string;
@@ -305,7 +306,7 @@ export class DispatchService {
     ]);
     const osrmWeatherMs = Number((performance.now() - tEnv).toFixed(2));
 
-    // 5. Stage 2: Vectorized ML Scoring (FastAPI Champion LightGBM + Challenger Online River)
+    // 5. Stage 2: ETA scoring (FastAPI baseline + online residual learner)
     const tMl = performance.now();
     let dispatchStrategy: DispatchTaskRecord['dispatch_strategy'] =
       'ML_HYBRID_CHAMPION_CHALLENGER';

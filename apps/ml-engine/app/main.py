@@ -14,7 +14,7 @@ from app.agent.resolver_agent import resolver_agent
 app = FastAPI(
     title="ResolveGrid AI Agent & Hybrid ML Engine",
     version="1.0.0",
-    description="Multi-Provider NIPOST Tool-Calling Agent + Champion LightGBM & Challenger Online River ETA Engine",
+    description="NIPOST tool-calling agent plus an explainable ETA baseline and online residual learner",
 )
 
 app.add_middleware(

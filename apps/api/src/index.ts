@@ -150,7 +150,7 @@ app.post('/v1/field/observations', async (req: Request, res: Response) => {
     walkMeters < 0 || walkMeters > 5000
   ) {
     res.status(400).json({
-      error: 'Provide consent, a registered agent, valid device GPS, and realistic access measurements.',
+      error: 'Provide consent, your signed-in field identity, valid device GPS, and realistic access measurements.',
     });
     return;
   }

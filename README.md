@@ -25,9 +25,9 @@
         │ 2. Python FastAPI AI Agent & ML Engine (apps/ml-engine :8000)  │
         │  • Stage A: Multi-Provider LLM Tool-Calling Agent              │
         │    (Gemini / Groq / OpenAI / Anthropic + Deterministic Chain)  │
-        │  • Stage B: Hybrid Champion / Challenger Last-50m ETA Engine   │
-        │    - Champion: Vectorized LightGBM / GBDT Urban Regressor      │
-        │    - Challenger: Online River Residual Corrector (learn_one)   │
+        │  • Stage B: Explainable Last-Mile ETA Engine                   │
+        │    - Deterministic route, weather, access and workload baseline│
+        │    - In-memory online residual correction from verified arrivals│
         └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -37,7 +37,7 @@
 
 - [`packages/shared`](./packages/shared): Canonical NIPOST 5-segment parser/assembler (`AA-99-H77-BB-55`), 36-State + FCT Legacy 6-Digit Postal Zone Bridge, Haversine & H3 spatial indexers.
 - [`apps/api`](./apps/api): Node.js + TypeScript Core API, Official NIPOST Client (`https://api.postcode.gov.ng`), Circuit Breaker, Redis `GEOSEARCH`, Redlock (`SETNX`), OSRM + Open-Meteo + OpenSky live telemetry, and HMAC-SHA256 KYC Proof-of-Location Pass signer.
-- [`apps/ml-engine`](./apps/ml-engine): Python FastAPI service running the Multi-Provider LLM Tool-Calling NIPOST Agent and the Hybrid Champion (LightGBM) + Challenger (Online River) ETA engine.
+- [`apps/ml-engine`](./apps/ml-engine): Python FastAPI service running the NIPOST tool-calling agent and an explainable ETA baseline with an online residual learner. A trained model is deliberately not claimed until consented, verified arrival data is available.
 - [`apps/web`](./apps/web): Next.js 15 operations console for source-aware address resolution, dispatch, field-evidence review, quality checks, and KYC verification.
 - [`apps/mobile`](./apps/mobile): React Native (Expo) field companion for provisioned agents to resolve a visit, capture consented device GPS and access observations, and retry a failed submission before leaving the app.
 - [`infra/mysql/init.sql`](./infra/mysql/init.sql) & [`infra/nginx/aetherhost.conf`](./infra/nginx/aetherhost.conf): Production MySQL 8.0 schema and Nginx reverse-proxy configuration for `aetherhost.com.ng`.
@@ -74,9 +74,12 @@ pnpm dev:web
 The mobile field app submits append-only access observations (GPS accuracy, gate delay,
 walk distance, and access notes). It never silently changes trusted building data. Configure
 `FIELD_ADMIN_KEY` and `FIELD_SESSION_SECRET` on the API server. An administrator provisions
-approved agents through `POST /v1/field/agents`; each agent then signs in through
+approved field identities through `POST /v1/field/agents`; each agent then signs in through
 `POST /v1/field/auth/login` and the mobile app sends the resulting short-lived bearer token.
 Never place either server secret in `EXPO_PUBLIC_*` variables or commit them to the app.
+
+Fixture-labelled results are deliberately blocked from accepting real field evidence. Use an
+approved NIPOST staging or production credential before carrying out operational field work.
 
 For an existing MySQL database, apply
 [`infra/mysql/migrations/001_field_observations.sql`](./infra/mysql/migrations/001_field_observations.sql)
