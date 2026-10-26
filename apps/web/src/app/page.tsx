@@ -12,7 +12,6 @@ import {
   Copy,
   Crosshair,
   Database,
-  LocateFixed,
   MapPin,
   Navigation,
   Radio,
@@ -34,7 +33,7 @@ const SAMPLES = [
   { label: 'Ado-Ekiti reference', query: 'NTA Road, back of Fabian Hotel, Basiri axis, Ado Ekiti (EK-01-A03-FK-01)' },
 ];
 
-type View = 'resolve' | 'quality' | 'verification';
+type View = 'resolve' | 'quality' | 'verification' | 'ml';
 
 function duration(seconds?: number | null) {
   if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '—';
@@ -53,6 +52,7 @@ export default function ResolveGridConsole() {
   const [query, setQuery] = useState(SAMPLES[0].query);
   const [resolution, setResolution] = useState<any>(null);
   const [telemetry, setTelemetry] = useState<any>(null);
+  const [mlStatus, setMlStatus] = useState<any>(null);
   const [agents, setAgents] = useState<any[]>([]);
   const [tenants, setTenants] = useState<any[]>([]);
   const [tenantId, setTenantId] = useState('tenant_logistics_ng');
@@ -66,19 +66,19 @@ export default function ResolveGridConsole() {
   const [batchInput, setBatchInput] = useState(SAMPLES.map((sample) => sample.query).join('\n'));
   const [batchResults, setBatchResults] = useState<any[]>([]);
   const [batchLoading, setBatchLoading] = useState(false);
-  const [kycLoading, setKycLoading] = useState(false);
-  const [kycResult, setKycResult] = useState<any>(null);
 
   const fetchOperationalState = useCallback(async () => {
     try {
-      const [accuracy, agentsResponse, tenantsResponse] = await Promise.all([
+      const [accuracy, agentsResponse, tenantsResponse, mlResponse] = await Promise.all([
         fetch(`${API_URL}/v1/telemetry/live-accuracy`),
         fetch(`${API_URL}/v1/agents`),
         fetch(`${API_URL}/v1/tenants`),
+        fetch(`${API_URL}/v1/ml/status`),
       ]);
       if (accuracy.ok) setTelemetry(await accuracy.json());
       if (agentsResponse.ok) setAgents((await agentsResponse.json()).data || []);
       if (tenantsResponse.ok) setTenants((await tenantsResponse.json()).data || []);
+      if (mlResponse.ok) setMlStatus(await mlResponse.json());
     } catch {
       setError('The operations API is unavailable. Refresh the page to try again.');
     }
@@ -168,32 +168,6 @@ export default function ResolveGridConsole() {
     }
   };
 
-  const verifyLocation = async () => {
-    setKycLoading(true);
-    setKycResult(null);
-    try {
-      const position = await new Promise<GeolocationPosition>((resolvePosition, rejectPosition) => {
-        navigator.geolocation.getCurrentPosition(resolvePosition, rejectPosition, { enableHighAccuracy: true, timeout: 8_000 });
-      });
-      const response = await fetch(`${API_URL}/v1/kyc/verify-location`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          applicant_ref: `WEB-LOCATION-${Date.now()}`,
-          claimed_postcode: resolution?.primary_match?.postcode,
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          gps_accuracy_m: position.coords.accuracy,
-        }),
-      });
-      if (!response.ok) throw new Error('Location verification was unavailable.');
-      setKycResult(await response.json());
-    } catch {
-      setError('Location access was not available. Use the field app for consented evidence capture.');
-    } finally {
-      setKycLoading(false);
-    }
-  };
-
   const primary = resolution?.primary_match;
   const address = resolution?.standardized_address_block;
   const parts = primary?.postcode?.split('-') || [];
@@ -213,6 +187,7 @@ export default function ResolveGridConsole() {
           <button className={view === 'resolve' ? 'rail-button active' : 'rail-button'} onClick={() => setView('resolve')} aria-label="Resolver"><Crosshair size={18} /></button>
           <button className={view === 'quality' ? 'rail-button active' : 'rail-button'} onClick={() => setView('quality')} aria-label="Quality"><BarChart3 size={18} /></button>
           <button className={view === 'verification' ? 'rail-button active' : 'rail-button'} onClick={() => setView('verification')} aria-label="Verification"><ShieldCheck size={18} /></button>
+          <button className={view === 'ml' ? 'rail-button active' : 'rail-button'} onClick={() => setView('ml')} aria-label="Model telemetry"><Activity size={18} /></button>
         </nav>
         <div className="rail-status"><Activity size={17} /><span className="status-dot" /></div>
       </aside>
@@ -227,6 +202,7 @@ export default function ResolveGridConsole() {
             <button className={view === 'resolve' ? 'active' : ''} onClick={() => setView('resolve')}>1. Resolve & dispatch</button>
             <button className={view === 'quality' ? 'active' : ''} onClick={() => setView('quality')}>2. Quality checks</button>
             <button className={view === 'verification' ? 'active' : ''} onClick={() => setView('verification')}>3. Evidence tools</button>
+            <button className={view === 'ml' ? 'active' : ''} onClick={() => setView('ml')}>4. ETA telemetry</button>
           </nav>
           <div className="topbar-metric"><Clock3 size={14} /> {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
         </header>
@@ -281,8 +257,8 @@ export default function ResolveGridConsole() {
                 </div>
                 <div className="dispatch-stats"><div><span>Source</span><strong>{primary ? sourceLabel(primary.source) : '—'}</strong></div><div><span>Nearest ETA</span><strong>{bestCandidate ? duration(bestCandidate.final_predicted_eta_sec) : '—'}</strong></div></div>
                 <label className="tenant-control"><span>Operating profile</span><select value={tenantId} onChange={(event) => setTenantId(event.target.value)}>{tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}</select></label>
-                <button className="primary-button dispatch-button" disabled={!primary || dispatching} onClick={runDispatch}><Navigation size={16} /> {dispatching ? 'Creating task…' : primary ? 'Create dispatch task' : 'Resolve an address first'}</button>
-                {dispatch ? <div className="dispatch-confirmation"><CheckCircle2 size={17} /><div><strong>Task {dispatch.task?.id || 'created'}</strong><p>{bestCandidate ? `${bestCandidate.callsign} ranked first • ${duration(bestCandidate.final_predicted_eta_sec)}` : 'Task created; candidate ranking is pending.'}</p></div></div> : <p className="panel-footnote">Dispatch creation is idempotent and does not mark arrival or performance as verified.</p>}
+                <button className="primary-button dispatch-button" disabled={!primary || dispatching} onClick={runDispatch}><Navigation size={16} /> {dispatching ? 'Creating demo plan…' : primary ? 'Create demo dispatch plan' : 'Resolve an address first'}</button>
+                {dispatch ? <div className="dispatch-confirmation"><CheckCircle2 size={17} /><div><strong>Demo plan {dispatch.task?.id || 'created'}</strong><p>{bestCandidate ? `${bestCandidate.callsign} ranked first • ${duration(bestCandidate.final_predicted_eta_sec)}` : 'Plan created; candidate ranking is pending.'}</p></div></div> : <p className="panel-footnote">Demo planning is rate-limited and does not mark arrival or performance as verified.</p>}
               </aside>
             </section>
 
@@ -294,7 +270,9 @@ export default function ResolveGridConsole() {
 
           {view === 'quality' && <section className="tool-grid"><section className="panel tool-panel"><span className="eyebrow">Quality checks</span><h1>Address benchmark</h1><p>Run the project’s maintained benchmark. Results report the data actually available to this environment.</p><button className="primary-button" onClick={runEvals} disabled={evalRunning}><BarChart3 size={16} /> {evalRunning ? 'Running checks…' : 'Run benchmark'}</button>{evalReport && <div className="evaluation-results"><div><span>Cases</span><strong>{evalReport.summary?.total_cases ?? '—'}</strong></div><div><span>Exact matches</span><strong>{evalReport.summary?.exact_building_matches ?? '—'}</strong></div><div><span>Accuracy</span><strong>{evalReport.summary?.accuracy_pct !== undefined ? `${evalReport.summary.accuracy_pct}%` : '—'}</strong></div></div>}</section><section className="panel trace-panel"><span className="eyebrow">Resolution trace</span><h2>Most recent tool chain</h2>{trace.length ? trace.map((step: any) => <div className="trace-row" key={step.step}><span>{step.step}</span><div><strong>{step.tool_name}</strong><p>{step.output_summary}</p></div><small>{step.status}</small></div>) : <div className="empty-inline"><Route size={20} /> Resolve an address to inspect the tool trace.</div>}</section></section>}
 
-          {view === 'verification' && <section className="tool-grid"><section className="panel tool-panel"><span className="eyebrow">Batch operations</span><h1>Address scrubber</h1><p>Resolve one address per line. Each result retains its source label.</p><textarea value={batchInput} onChange={(event) => setBatchInput(event.target.value)} aria-label="Addresses to resolve in batch" /><button className="primary-button" onClick={runBatch} disabled={batchLoading}><Clipboard size={16} /> {batchLoading ? 'Resolving…' : 'Run batch resolution'}</button>{batchResults.length > 0 && <div className="batch-results">{batchResults.slice(0, 6).map((item: any, index) => <div key={index}><span>{item.primary_match?.postcode || item.postcode || 'No match'}</span><small>{sourceLabel(item.primary_match?.source)}</small></div>)}</div>}</section><section className="panel tool-panel"><span className="eyebrow">Consent-first evidence</span><h2>Location check</h2><p>Browser location checks are for testing only. Field evidence must be captured through the authenticated mobile app.</p><button className="quiet-button" onClick={verifyLocation} disabled={kycLoading}><LocateFixed size={16} /> {kycLoading ? 'Requesting location…' : 'Test browser location'}</button>{kycResult ? <div className="verification-result"><CheckCircle2 size={18} /><div><strong>{kycResult.status || 'Check completed'}</strong><p>{kycResult.evidence?.postcode_source || 'Evidence returned from the location service.'}</p></div></div> : <div className="field-callout"><ShieldCheck size={18} /><span>Mobile field capture is the next product surface to complete.</span></div>}</section></section>}
+          {view === 'verification' && <section className="tool-grid"><section className="panel tool-panel"><span className="eyebrow">Batch operations</span><h1>Address scrubber</h1><p>Resolve one address per line. Each result retains its source label.</p><textarea value={batchInput} onChange={(event) => setBatchInput(event.target.value)} aria-label="Addresses to resolve in batch" /><button className="primary-button" onClick={runBatch} disabled={batchLoading}><Clipboard size={16} /> {batchLoading ? 'Resolving…' : 'Run batch resolution'}</button>{batchResults.length > 0 && <div className="batch-results">{batchResults.slice(0, 6).map((item: any, index) => <div key={index}><span>{item.primary_match?.postcode || item.postcode || 'No match'}</span><small>{sourceLabel(item.primary_match?.source)}</small></div>)}</div>}</section><section className="panel tool-panel"><span className="eyebrow">Consent-first evidence</span><h2>Protected evidence and KYC</h2><p>Field evidence is submitted only through the authenticated mobile app. KYC pass creation and task verification are protected server operations, not public browser tools.</p><div className="field-callout"><ShieldCheck size={18} /><span>For a real field visit, use the mobile app with a provisioned field identity and an official NIPOST result.</span></div></section></section>}
+
+          {view === 'ml' && <section className="ml-layout"><section className="panel ml-overview"><div className="panel-heading compact"><div><span className="eyebrow">ETA telemetry</span><h1>Explainable ETA baseline</h1><p>Operational factors are visible. The service does not claim a trained model before it has verified arrival data.</p></div><span className={mlStatus?.available ? 'ml-status good' : 'ml-status'}><span className="status-dot" /> {mlStatus?.available ? 'Engine online' : 'Status unavailable'}</span></div><div className="ml-metrics"><div><span>Baseline</span><strong>{mlStatus?.champion_model || 'Loading…'}</strong></div><div><span>Online learner</span><strong>{mlStatus?.challenger_model || 'Loading…'}</strong></div><div><span>Verified samples</span><strong>{mlStatus?.online_samples_learned ?? '—'}</strong></div><div><span>Rolling MAE</span><strong>{mlStatus?.online_samples_learned ? duration(mlStatus?.rolling_mae_sec) : 'Not measured yet'}</strong></div></div></section><section className="panel ml-factors"><span className="eyebrow">Configured ETA factors</span><h2>What affects each estimate</h2><p>These are baseline factor weights, not learned feature importance claims.</p><div className="factor-list">{Object.entries(mlStatus?.feature_importances || {}).map(([factor, weight]: [string, any]) => <div key={factor}><span>{factor.replaceAll('_', ' ')}</span><div><i style={{ width: `${Math.round(Number(weight) * 100)}%` }} /><strong>{Math.round(Number(weight) * 100)}%</strong></div></div>)}</div></section><section className="panel ml-comparison"><span className="eyebrow">Most recent demo plan</span><h2>ETA comparison</h2>{bestCandidate ? <><div className="eta-comparison"><div><span>Route baseline</span><strong>{duration(bestCandidate.champion_lgbm_eta_sec)}</strong></div><div><span>Online-corrected</span><strong>{duration(bestCandidate.challenger_river_eta_sec)}</strong></div><div><span>Blended ETA</span><strong>{duration(bestCandidate.final_predicted_eta_sec)}</strong></div></div><div className="factor-chips"><span>Road {duration(bestCandidate.osrm_base_duration_sec)}</span><span>Gate {duration(bestCandidate.gate_delay_sec)}</span><span>Weather +{duration(bestCandidate.weather_penalty_sec)}</span></div></> : <div className="empty-inline"><Route size={20} /> Create a demo dispatch plan to inspect the ETA factors.</div>}</section></section>}
         </main>
         <footer className="footer"><span>ResolveGrid operations console</span><span>Source-aware results • consent-first evidence</span></footer>
       </div>

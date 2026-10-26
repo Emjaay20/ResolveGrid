@@ -13,8 +13,26 @@ import { externalTelemetry } from './services/externalTelemetry';
 import { fieldAuthService } from './services/fieldAuthService';
 
 export const app = express();
+app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+
+const writeRateWindows = new Map<string, { count: number; resetAt: number }>();
+
+function enforceWriteRate(req: Request, res: Response, scope: string, limit: number, windowMs: number): boolean {
+  const forwarded = req.header('X-Forwarded-For')?.split(',')[0]?.trim();
+  const key = `${scope}:${forwarded || req.ip}`;
+  const now = Date.now();
+  const entry = writeRateWindows.get(key);
+  const current = !entry || entry.resetAt <= now ? { count: 0, resetAt: now + windowMs } : entry;
+  current.count += 1;
+  writeRateWindows.set(key, current);
+  if (current.count <= limit) return true;
+
+  res.setHeader('Retry-After', Math.ceil((current.resetAt - now) / 1000));
+  res.status(429).json({ error: 'Too many requests. Please wait before trying again.' });
+  return false;
+}
 
 function extractNipostKey(req: Request): string | undefined {
   const headerKey = req.header('X-Nipost-Key') || req.header('X-API-Key');
@@ -28,6 +46,19 @@ function hasFieldAdminAccess(req: Request): boolean | null {
   const expected = Buffer.from(configuredKey);
   const received = Buffer.from(submittedKey);
   return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+}
+
+function requireFieldAdminAccess(req: Request, res: Response): boolean {
+  const access = hasFieldAdminAccess(req);
+  if (access === null) {
+    res.status(503).json({ error: 'This protected operation is not configured on this server.' });
+    return false;
+  }
+  if (!access) {
+    res.status(401).json({ error: 'A valid field-admin credential is required for this operation.' });
+    return false;
+  }
+  return true;
 }
 
 // ============================================================================
@@ -114,6 +145,29 @@ app.get('/v1/nipost/registry', (_req: Request, res: Response) => {
     data: Array.from(store.postcodeMap.values()),
     gateway_metrics: nipostClient.getMetrics(),
   });
+});
+
+app.get('/v1/ml/status', async (_req: Request, res: Response) => {
+  const mlEngineUrl = (process.env.ML_ENGINE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const response = await fetch(`${mlEngineUrl}/v1/health`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!response.ok) throw new Error('ML engine unavailable');
+    const payload = (await response.json()) as { ml_engine?: Record<string, unknown> };
+    res.json({ available: true, ...(payload.ml_engine || {}) });
+  } catch {
+    clearTimeout(timer);
+    res.json({
+      available: false,
+      champion_model: 'ETA baseline status unavailable',
+      challenger_model: 'Online residual learner status unavailable',
+      online_samples_learned: 0,
+      rolling_mae_sec: null,
+      feature_importances: {},
+    });
+  }
 });
 
 app.post('/v1/field/observations', async (req: Request, res: Response) => {
@@ -298,6 +352,7 @@ app.get('/v1/field/me', (req: Request, res: Response) => {
 });
 
 app.post('/v1/tasks/dispatch', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'dispatch', 12, 5 * 60 * 1000)) return;
   const idempotencyKey =
     req.header('Idempotency-Key') ||
     req.body?.idempotency_key ||
@@ -316,6 +371,8 @@ app.post('/v1/tasks/dispatch', async (req: Request, res: Response) => {
 });
 
 app.post('/v1/tasks/:id/verify-arrival', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'arrival-verification', 10, 5 * 60 * 1000)) return;
+  if (!requireFieldAdminAccess(req, res)) return;
   const taskId = String(req.params.id);
   const { actual_duration_sec, measured_gate_delay_sec, building_access_notes } = req.body || {};
 
@@ -337,6 +394,8 @@ app.post('/v1/tasks/:id/verify-arrival', async (req: Request, res: Response) => 
 });
 
 app.post('/v1/telemetry/ping', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'telemetry', 60, 60 * 1000)) return;
+  if (!requireFieldAdminAccess(req, res)) return;
   const { agent_id, latitude, longitude, velocity_kmh, heading_deg, telemetry_source } =
     req.body || {};
   if (!agent_id || latitude === undefined || longitude === undefined) {
@@ -397,6 +456,12 @@ app.get('/v1/telemetry/live-accuracy', (_req: Request, res: Response) => {
 // 5. Cryptographically Signed KYC Proof-of-Location Pass
 // ============================================================================
 app.post('/v1/kyc/verify-location', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'kyc', 6, 5 * 60 * 1000)) return;
+  if (!requireFieldAdminAccess(req, res)) return;
+  if (!process.env.KYC_SIGNING_SECRET?.trim()) {
+    res.status(503).json({ error: 'KYC signing is not configured on this server.' });
+    return;
+  }
   const { applicant_ref, latitude, longitude, gps_accuracy_m, claimed_postcode } = req.body || {};
   if (latitude === undefined || longitude === undefined) {
     res.status(400).json({ error: 'latitude and longitude from hardware GPS are required.' });
@@ -440,6 +505,7 @@ app.get('/v1/kyc/verifications', (_req: Request, res: Response) => {
 // 6. Golden Nigerian Address Benchmark & Evaluation Suite Proxy
 // ============================================================================
 app.post('/v1/evals/run', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'evaluation', 6, 5 * 60 * 1000)) return;
   const mlEngineUrl = (process.env.ML_ENGINE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
   try {
     const controller = new AbortController();

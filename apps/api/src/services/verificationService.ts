@@ -10,8 +10,7 @@ import { nipostClient } from '../clients/nipostClient';
 
 export class VerificationService {
   private mlEngineUrl = (process.env.ML_ENGINE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
-  private kycSecret =
-    process.env.KYC_SIGNING_SECRET || 'aetherhost_resolvegrid_kyc_hmac_secret_2026_prod';
+  private kycSecret = process.env.KYC_SIGNING_SECRET?.trim() || '';
 
   /**
    * Records physical ground-truth arrival at the target NIPOST building geofence,
