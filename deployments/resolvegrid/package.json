@@ -1,0 +1,12 @@
+{
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "description": "ResolveGrid minimal server",
+  "main": "index.js",
+  "name": "resolvegrid",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "version": "1.0.0"
+}

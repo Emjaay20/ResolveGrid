@@ -1,0 +1,17 @@
+
+services:
+  app:
+    build: .
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=aetherhost-net"
+      - "traefik.http.routers.resolvegrid-app.rule=Host(`resolvegrid.aetherhost.com.ng`)"
+      - "traefik.http.routers.resolvegrid-app.entrypoints=websecure"
+      - "traefik.http.routers.resolvegrid-app.tls.certresolver=letsencrypt"
+      - "traefik.http.services.resolvegrid-app.loadbalancer.server.port=3000"
+    networks:
+      - aetherhost-net
+networks:
+  aetherhost-net:
+    external: true

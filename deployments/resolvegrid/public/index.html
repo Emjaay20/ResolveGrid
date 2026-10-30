@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ResolveGrid</title>
+  <style>
+    body {font-family: Arial, sans-serif; padding: 2rem;}
+    #status {margin-top: 1rem; color: green;}
+  </style>
+</head>
+<body>
+  <h1>ResolveGrid</h1>
+  <button id="check">Check Health</button>
+  <div id="status"></div>
+  <script>
+    document.getElementById('check').addEventListener('click', async () => {
+      try {
+        const res = await fetch('/health');
+        if (res.ok) {
+          document.getElementById('status').textContent = 'Server healthy!';
+        } else {
+          document.getElementById('status').textContent = 'Health check failed';
+        }
+      } catch (e) {
+        document.getElementById('status').textContent = 'Error: ' + e;
+      }
+    });
+  </script>
+</body>
+</html>
