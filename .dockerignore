@@ -10,3 +10,8 @@ dist
 .git
 .DS_Store
 *.log
+
+# The AetherHost checkout also contains other app deployments and build output.
+# They are not part of ResolveGrid's single-container production image.
+deployments
+crates

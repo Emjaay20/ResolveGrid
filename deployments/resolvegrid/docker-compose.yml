@@ -1,7 +1,12 @@
 
 services:
   app:
-    build: .
+    # AetherHost invokes this compose file from deployments/resolvegrid, but the
+    # production application is the monorepo two levels above it. Building this
+    # folder served only the placeholder status page and caused the public 404s.
+    build:
+      context: ../..
+      dockerfile: Dockerfile
     env_file: .env
     labels:
       - "traefik.enable=true"
