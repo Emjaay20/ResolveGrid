@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'ResolveGrid — Address Intelligence Operations',
+  title: 'ResolveGrid — Structured locations for better delivery',
   description: 'Source-aware Nigerian address resolution, dispatch readiness, and consented field evidence.',
 };
 

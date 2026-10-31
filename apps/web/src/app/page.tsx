@@ -1,6 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import PublicSite from '../components/PublicSite';
 import {
   Activity,
   AlertCircle,
@@ -47,7 +49,12 @@ function sourceLabel(source?: string) {
   return 'NIPOST response';
 }
 
-export default function ResolveGridConsole() {
+export default function ResolveGridRoute() {
+  const pathname = usePathname();
+  return pathname === '/' ? <PublicSite page="home" /> : <ResolveGridConsole />;
+}
+
+function ResolveGridConsole() {
   const [view, setView] = useState<View>('resolve');
   const [query, setQuery] = useState(SAMPLES[0].query);
   const [resolution, setResolution] = useState<any>(null);
