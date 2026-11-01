@@ -177,6 +177,19 @@ CREATE TABLE IF NOT EXISTS field_agents (
   INDEX idx_field_agent_active (active, agent_id)
 ) ENGINE=InnoDB;
 
+-- Field agents are explicitly linked to the pilot organisation that may assign
+-- them work. This keeps mobile task inboxes isolated between workspaces.
+CREATE TABLE IF NOT EXISTS workspace_field_agents (
+  tenant_id VARCHAR(64) NOT NULL,
+  agent_id VARCHAR(64) NOT NULL,
+  linked_by_user_id VARCHAR(64) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (tenant_id, agent_id),
+  CONSTRAINT fk_workspace_field_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+  CONSTRAINT fk_workspace_field_agent FOREIGN KEY (agent_id) REFERENCES field_agents(agent_id) ON DELETE RESTRICT,
+  INDEX idx_workspace_field_agent (agent_id)
+) ENGINE=InnoDB;
+
 -- 10. Invitation-only operator workspaces. This mirrors migration 003 so a
 -- brand-new database has the same pilot-access schema before the API starts.
 CREATE TABLE IF NOT EXISTS operator_users (

@@ -38,6 +38,15 @@ type QueuedObservation = {
   payload: Record<string, unknown>;
 };
 
+type FieldTask = {
+  id: string;
+  raw_input_address: string;
+  resolved_postcode: string;
+  assigned_agent_callsign: string;
+  predicted_arrival_at: string;
+  status: 'DISPATCHED' | 'EN_ROUTE';
+};
+
 const shortSource = (source?: string) =>
   source === 'LOCAL_DEVELOPMENT_FIXTURE' ? 'Development fixture' : source || 'Source unavailable';
 
@@ -55,6 +64,8 @@ export default function ResolveGridMobileApp() {
   const [compoundWalkMeters, setCompoundWalkMeters] = useState('');
   const [accessNotes, setAccessNotes] = useState('');
   const [queue, setQueue] = useState<QueuedObservation[]>([]);
+  const [assignedTasks, setAssignedTasks] = useState<FieldTask[]>([]);
+  const [activeTask, setActiveTask] = useState<FieldTask | null>(null);
   const [notice, setNotice] = useState('Sign in to begin a field verification.');
   const [isWorking, setIsWorking] = useState(false);
 
@@ -65,6 +76,33 @@ export default function ResolveGridMobileApp() {
   }, [coordinates]);
 
   const fieldName = fieldSession?.agent.display_name?.split(' ')[0] || 'Field agent';
+
+  const loadAssignedTasks = async (token = fieldSession?.access_token) => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_BASE}/v1/field/tasks`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (response.ok) setAssignedTasks(data.data || []);
+    } catch {
+      // The task list can be refreshed later without blocking evidence capture.
+    }
+  };
+
+  const openAssignedTask = (task: FieldTask) => {
+    setActiveTask(task);
+    setManualPostcode(task.resolved_postcode);
+    setAddressQuery(task.raw_input_address);
+    setResolvedPlace({
+      postcode: task.resolved_postcode,
+      address: task.raw_input_address,
+      source: 'ASSIGNED_WORKSPACE_TASK',
+      confidence: 1,
+    });
+    setNotice(`Task ${task.id} opened. Capture evidence when you arrive.`);
+    setScreen('capture');
+  };
 
   const captureGps = async (): Promise<Coordinates | null> => {
     setNotice('Requesting your device location…');
@@ -111,6 +149,7 @@ export default function ResolveGridMobileApp() {
       }
       setFieldSession(data);
       setFieldPassword('');
+      await loadAssignedTasks(data.access_token);
       setNotice(`Signed in. ${data.agent.display_name}, you are ready for field work.`);
     } catch {
       setNotice('Sign-in needs a connection to the ResolveGrid service.');
@@ -170,6 +209,7 @@ export default function ResolveGridMobileApp() {
     measured_gate_delay_sec: Number(gateDelaySec || 0),
     compound_walk_meters: Number(compoundWalkMeters || 0),
     building_access_notes: accessNotes.trim(),
+    ...(activeTask ? { task_id: activeTask.id } : {}),
   });
 
   const postObservation = async (payload: Record<string, unknown>) => {
@@ -217,7 +257,11 @@ export default function ResolveGridMobileApp() {
     const payload = makeObservationPayload(gps);
     const result = await postObservation(payload);
     if (result.ok) {
-      setNotice(result.message);
+      setNotice(activeTask ? 'Arrival evidence submitted. The assigned task is now verified.' : result.message);
+      if (activeTask) {
+        setActiveTask(null);
+        await loadAssignedTasks();
+      }
       setGateDelaySec('');
       setCompoundWalkMeters('');
       setAccessNotes('');
@@ -253,6 +297,7 @@ export default function ResolveGridMobileApp() {
 
   const resetVisit = () => {
     setResolvedPlace(null);
+    setActiveTask(null);
     setManualPostcode('');
     setAddressQuery('');
     setCoordinates(null);
@@ -330,7 +375,13 @@ export default function ResolveGridMobileApp() {
           <>
             <Text style={styles.eyebrow}>TODAY</Text>
             <Text style={styles.pageTitle}>Good to see you, {fieldName}.</Text>
-            <Text style={styles.pageCopy}>Start a visit when you arrive at a property. The record stays tied to your signed-in field identity.</Text>
+            <Text style={styles.pageCopy}>Open an assigned plan when you arrive, then submit evidence tied to your field identity.</Text>
+
+            <View style={styles.taskInbox}>
+              <View style={styles.cardHeading}><View><Text style={styles.cardTitle}>My assigned plans</Text><Text style={styles.helper}>{assignedTasks.length ? `${assignedTasks.length} plan${assignedTasks.length === 1 ? '' : 's'} waiting for you` : 'No plans assigned yet'}</Text></View><TouchableOpacity onPress={() => loadAssignedTasks()}><Text style={styles.textButton}>Refresh</Text></TouchableOpacity></View>
+              {assignedTasks.map((task) => <TouchableOpacity key={task.id} onPress={() => openAssignedTask(task)} style={styles.taskRow}><View><Text style={styles.taskCode}>{task.resolved_postcode}</Text><Text style={styles.taskAddress}>{task.raw_input_address}</Text></View><Text style={styles.taskAction}>Open</Text></TouchableOpacity>)}
+              {!assignedTasks.length && <Text style={styles.helper}>Your dispatcher will assign a plan to your field identity.</Text>}
+            </View>
 
             <View style={styles.card}>
               <View style={styles.cardHeading}><Text style={styles.cardTitle}>Start a field visit</Text><Text style={styles.step}>01</Text></View>
@@ -386,6 +437,7 @@ export default function ResolveGridMobileApp() {
               <Text style={styles.label}>POSTCODE</Text>
               <Text style={styles.visitCode}>{activePostcode || 'Not set yet'}</Text>
               <Text style={styles.visitAddress}>{resolvedPlace?.address || 'Enter an official postcode before submitting.'}</Text>
+              {activeTask && <Text style={styles.assignedTaskLabel}>ASSIGNED TASK · {activeTask.id}</Text>}
               {resolvedPlace && <Text style={styles.sourceLabel}>{shortSource(resolvedPlace.source)}</Text>}
             </View>
             <View style={styles.card}>
@@ -486,6 +538,11 @@ const styles = StyleSheet.create({
   confidence: { color: '#50705f', fontSize: 11, fontWeight: '700' },
   resolvedCode: { color: COLORS.ink, fontFamily: 'monospace', fontSize: 22, fontWeight: '800', letterSpacing: 1, marginTop: 12 },
   resolvedAddress: { color: '#42514a', fontSize: 13, lineHeight: 19, marginTop: 6 },
+  taskInbox: { backgroundColor: COLORS.paper, borderColor: COLORS.line, borderWidth: 1, borderRadius: 16, padding: 18, marginBottom: 15 },
+  taskRow: { borderTopColor: COLORS.line, borderTopWidth: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 13, marginTop: 13, gap: 10 },
+  taskCode: { color: COLORS.forestDark, fontFamily: 'monospace', fontWeight: '800', fontSize: 12 },
+  taskAddress: { color: '#5d6762', fontSize: 12, lineHeight: 17, marginTop: 4, maxWidth: 245 },
+  taskAction: { color: COLORS.forest, fontWeight: '800', fontSize: 12 },
   warning: { color: COLORS.warning, fontSize: 12, lineHeight: 18, marginTop: 12 },
   queueCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderTopColor: COLORS.line, marginTop: 24, paddingVertical: 18 },
   queueTitle: { color: COLORS.ink, fontSize: 14, fontWeight: '800' },
@@ -497,6 +554,7 @@ const styles = StyleSheet.create({
   visitCard: { backgroundColor: COLORS.ink, borderRadius: 15, padding: 17, marginBottom: 15 },
   visitCode: { color: '#fffdf8', fontFamily: 'monospace', fontSize: 22, fontWeight: '800', letterSpacing: 0.8 },
   visitAddress: { color: '#c9d0cb', fontSize: 13, marginTop: 7, lineHeight: 18 },
+  assignedTaskLabel: { color: '#b9d7c8', fontFamily: 'monospace', fontSize: 10, fontWeight: '800', marginTop: 12 },
   gpsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderColor: '#d9d4c9', borderWidth: 1, backgroundColor: '#fcfaf5', borderRadius: 10, padding: 12 },
   gpsTitle: { color: COLORS.ink, fontSize: 13, fontWeight: '700' },
   gpsMeta: { color: COLORS.muted, fontFamily: 'monospace', fontSize: 10, marginTop: 4 },

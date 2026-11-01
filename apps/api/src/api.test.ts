@@ -106,3 +106,15 @@ test('dispatch plans retain a pilot workspace ID while using a fallback dispatch
 
   assert.equal(dispatched.task.tenant_id, 'pilot_workspace_test');
 });
+
+test('a workspace dispatch can be assigned to a named field agent', async () => {
+  const dispatched = await dispatchService.dispatchTask({
+    idempotencyKey: `field_assignment_${Date.now()}`,
+    tenantId: 'pilot_workspace_test',
+    postcode: 'FC-02-A09-DB-09',
+    assignedFieldAgent: { agentId: 'field_pilot_01', displayName: 'Pilot Field Agent' },
+  });
+
+  assert.equal(dispatched.task.assigned_agent_id, 'field_pilot_01');
+  assert.equal(dispatched.task.assigned_agent_callsign, 'Pilot Field Agent');
+});

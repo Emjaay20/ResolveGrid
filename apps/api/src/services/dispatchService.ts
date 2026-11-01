@@ -199,6 +199,7 @@ export class DispatchService {
     rawAddress?: string;
     postcode?: string;
     overrideNipostKey?: string;
+    assignedFieldAgent?: { agentId: string; displayName: string };
   }): Promise<{
     task: DispatchTaskRecord;
     resolved_location: NipostLookupResult;
@@ -426,8 +427,8 @@ export class DispatchService {
       raw_input_address: params.rawAddress || resolvedLocation.recent_house_address?.recent || resolvedLocation.postcode,
       resolved_postcode: resolvedLocation.postcode,
       legacy_postal_code: resolvedLocation.legacy_postal_code,
-      assigned_agent_id: winningCandidate.agent_id,
-      assigned_agent_callsign: winningCandidate.callsign,
+      assigned_agent_id: params.assignedFieldAgent?.agentId || winningCandidate.agent_id,
+      assigned_agent_callsign: params.assignedFieldAgent?.displayName || winningCandidate.callsign,
       candidate_count: rankedCandidates.length,
       road_distance_m: winningCandidate.road_distance_m,
       osrm_base_duration_sec: winningCandidate.osrm_base_duration_sec,

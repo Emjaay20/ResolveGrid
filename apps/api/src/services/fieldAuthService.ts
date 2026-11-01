@@ -89,6 +89,9 @@ export class FieldAuthService {
     }
     const email = params.email.trim().toLowerCase();
     if (store.fieldAgentByEmail.has(email)) throw new Error('A field agent already uses this email.');
+    if (!/^[a-z][a-z0-9_]{2,63}$/.test(params.agentId)) {
+      throw new Error('Field-agent ID must use lowercase letters, numbers, or underscores and start with a letter.');
+    }
     // Field-evidence agents are provisioned identities, not necessarily dispatch
     // couriers. Requiring them to reuse a live dispatch record would tie a person
     // to a fixture or another operator's vehicle before they can use the mobile

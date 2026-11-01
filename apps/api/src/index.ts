@@ -12,6 +12,7 @@ import { verificationService } from './services/verificationService';
 import { externalTelemetry } from './services/externalTelemetry';
 import { fieldAuthService } from './services/fieldAuthService';
 import { WorkspaceRole, workspaceAuthService } from './services/workspaceAuthService';
+import { workspaceFieldTeamService } from './services/workspaceFieldTeamService';
 
 export const app = express();
 app.set('trust proxy', 1);
@@ -228,6 +229,7 @@ app.post('/v1/field/observations', async (req: Request, res: Response) => {
   const walkMeters = Number(body.compound_walk_meters ?? 0);
   const agentId = String(body.agent_id || '').trim();
   const postcode = String(body.postcode || '').trim();
+  const taskId = body.task_id ? String(body.task_id).trim() : '';
 
   if (
     body.location_consent !== true ||
@@ -245,6 +247,20 @@ app.post('/v1/field/observations', async (req: Request, res: Response) => {
     res.status(400).json({
       error: 'Provide consent, your signed-in field identity, valid device GPS, and realistic access measurements.',
     });
+    return;
+  }
+
+  const assignedTask = taskId ? store.taskMap.get(taskId) : undefined;
+  if (taskId && !assignedTask) {
+    res.status(404).json({ error: 'This assigned task is no longer available. Refresh your mobile inbox.' });
+    return;
+  }
+  if (assignedTask && assignedTask.assigned_agent_id !== session.agent_id) {
+    res.status(403).json({ error: 'This task is assigned to a different field agent.' });
+    return;
+  }
+  if (assignedTask && assignedTask.resolved_postcode !== postcode) {
+    res.status(422).json({ error: 'Submit evidence for the postcode attached to the assigned task.' });
     return;
   }
 
@@ -267,7 +283,17 @@ app.post('/v1/field/observations', async (req: Request, res: Response) => {
     res.status(422).json(submitted);
     return;
   }
-  res.status(201).json(submitted);
+  const verified = assignedTask
+    ? await verificationService.verifyTaskArrivalAndLearn({
+        taskId: assignedTask.id,
+        measuredGateDelaySec: gateDelay,
+        buildingAccessNotes:
+          typeof body.building_access_notes === 'string'
+            ? body.building_access_notes.slice(0, 500)
+            : undefined,
+      })
+    : null;
+  res.status(201).json({ ...submitted, task: verified?.task || null });
 });
 
 // ============================================================================
@@ -388,6 +414,18 @@ app.get('/v1/field/me', (req: Request, res: Response) => {
     return;
   }
   res.json({ agent: session });
+});
+
+app.get('/v1/field/tasks', (req: Request, res: Response) => {
+  const session = fieldAuthService.verifyAuthorization(req.header('Authorization'));
+  if (!session) {
+    res.status(401).json({ error: 'A valid field-agent bearer token is required.' });
+    return;
+  }
+  const tasks = Array.from(store.taskMap.values())
+    .filter((task) => task.assigned_agent_id === session.agent_id && ['DISPATCHED', 'EN_ROUTE'].includes(task.status))
+    .sort((a, b) => new Date(b.dispatched_at).getTime() - new Date(a.dispatched_at).getTime());
+  res.json({ data: tasks });
 });
 
 // ============================================================================
@@ -527,18 +565,74 @@ app.get('/v1/workspaces/:workspaceId/tasks', async (req: Request, res: Response)
   res.json({ workspace: session.workspaces.find((workspace) => workspace.tenant_id === workspaceId), data: tasks });
 });
 
+app.get('/v1/workspaces/:workspaceId/field-agents', async (req: Request, res: Response) => {
+  const workspaceId = String(req.params.workspaceId);
+  const session = await requireWorkspaceAccess(req, res, workspaceId);
+  if (!session) return;
+  try {
+    res.json({ data: await workspaceFieldTeamService.list(workspaceId) });
+  } catch {
+    res.status(503).json({ error: 'Field-team access is temporarily unavailable.' });
+  }
+});
+
+app.post('/v1/workspaces/:workspaceId/field-agents', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'workspace-field-agent', 10, 60 * 60 * 1000)) return;
+  const workspaceId = String(req.params.workspaceId);
+  const session = await requireWorkspaceAccess(req, res, workspaceId, ['OWNER']);
+  if (!session) return;
+  const { agent_id, email, display_name, password } = req.body || {};
+  if (
+    typeof agent_id !== 'string' ||
+    typeof email !== 'string' ||
+    typeof display_name !== 'string' ||
+    typeof password !== 'string'
+  ) {
+    res.status(400).json({ error: 'agent_id, email, display_name, and password are required.' });
+    return;
+  }
+  try {
+    const agent = await fieldAuthService.provision({
+      agentId: agent_id,
+      email,
+      displayName: display_name,
+      password,
+    });
+    await workspaceFieldTeamService.assign(workspaceId, agent.agent_id, session.user.id);
+    res.status(201).json({ agent });
+  } catch (error) {
+    res.status(422).json({ error: error instanceof Error ? error.message : 'Unable to provision this field agent.' });
+  }
+});
+
 app.post('/v1/workspaces/:workspaceId/dispatch', async (req: Request, res: Response) => {
   if (!enforceWriteRate(req, res, 'workspace-dispatch', 30, 5 * 60 * 1000)) return;
   const workspaceId = String(req.params.workspaceId);
   const session = await requireWorkspaceAccess(req, res, workspaceId, ['OWNER', 'DISPATCHER']);
   if (!session) return;
   const { raw_address, postcode } = req.body || {};
+  const fieldAgentId = req.body?.field_agent_id ? String(req.body.field_agent_id) : undefined;
+  let assignedFieldAgent: { agentId: string; displayName: string } | undefined;
+  if (fieldAgentId) {
+    const linked = await workspaceFieldTeamService.hasAgent(workspaceId, fieldAgentId);
+    if (!linked) {
+      res.status(422).json({ error: 'Choose an active field agent linked to this workspace.' });
+      return;
+    }
+    const account = Array.from(store.fieldAgentById.values()).find((agent) => agent.agent_id === fieldAgentId);
+    if (!account) {
+      res.status(422).json({ error: 'That field-agent account is unavailable.' });
+      return;
+    }
+    assignedFieldAgent = { agentId: account.agent_id, displayName: account.display_name };
+  }
   const dispatched = await dispatchService.dispatchTask({
     idempotencyKey: req.header('Idempotency-Key') || `workspace_${crypto.randomUUID()}`,
     tenantId: workspaceId,
     rawAddress: raw_address ? String(raw_address) : undefined,
     postcode: postcode ? String(postcode) : undefined,
     overrideNipostKey: extractNipostKey(req),
+    assignedFieldAgent,
   });
   res.json({ ...dispatched, workspace_user: session.user });
 });
@@ -804,6 +898,7 @@ if (require.main === module) {
   store.initialize().then(async () => {
     try {
       await workspaceAuthService.ensureSchema();
+      await workspaceFieldTeamService.ensureSchema();
     } catch (error) {
       console.error('[ResolveGrid API] Workspace access schema unavailable:', error instanceof Error ? error.message : error);
     }

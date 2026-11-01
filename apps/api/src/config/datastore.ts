@@ -926,6 +926,55 @@ class DataStore {
         this.fieldAgentByEmail.set(account.email, account);
         this.fieldAgentById.set(account.id, account);
       }
+
+      // Restore recent dispatches so a workspace activity feed and a field
+      // agent's inbox survive an API restart. Callsigns are presentation data;
+      // for provisioned field agents the signed-in identity is the source.
+      const [taskRows] = (await pool.query(
+        `SELECT id, idempotency_key, tenant_id, raw_input_address, resolved_postcode, legacy_postal_code,
+                assigned_agent_id, candidate_count, road_distance_m, osrm_base_duration_sec, gate_delay_sec,
+                weather_rain_mm, predicted_eta_sec, champion_lgbm_eta_sec, challenger_river_eta_sec,
+                dispatch_strategy, status, dispatched_at, predicted_arrival_at, actual_arrival_at,
+                actual_duration_sec, residual_error_sec, online_model_updated
+           FROM dispatch_tasks
+          ORDER BY dispatched_at DESC
+          LIMIT 500`
+      )) as unknown as [Array<Record<string, unknown>>, unknown];
+      for (const row of taskRows) {
+        const assignedAgentId = String(row.assigned_agent_id || '');
+        const fieldAgent = Array.from(this.fieldAgentById.values()).find(
+          (account) => account.agent_id === assignedAgentId
+        );
+        const dispatchAgent = this.agentMap.get(assignedAgentId);
+        const task: DispatchTaskRecord = {
+          id: String(row.id),
+          idempotency_key: String(row.idempotency_key),
+          tenant_id: String(row.tenant_id),
+          raw_input_address: String(row.raw_input_address),
+          resolved_postcode: String(row.resolved_postcode),
+          legacy_postal_code: String(row.legacy_postal_code),
+          assigned_agent_id: assignedAgentId,
+          assigned_agent_callsign: fieldAgent?.display_name || dispatchAgent?.callsign || assignedAgentId || 'Assignment pending',
+          candidate_count: Number(row.candidate_count),
+          road_distance_m: Number(row.road_distance_m),
+          osrm_base_duration_sec: Number(row.osrm_base_duration_sec),
+          gate_delay_sec: Number(row.gate_delay_sec),
+          weather_rain_mm: Number(row.weather_rain_mm),
+          predicted_eta_sec: Number(row.predicted_eta_sec),
+          champion_lgbm_eta_sec: Number(row.champion_lgbm_eta_sec),
+          challenger_river_eta_sec: Number(row.challenger_river_eta_sec),
+          dispatch_strategy: row.dispatch_strategy as DispatchTaskRecord['dispatch_strategy'],
+          status: row.status as DispatchTaskRecord['status'],
+          dispatched_at: new Date(row.dispatched_at as string).toISOString(),
+          predicted_arrival_at: new Date(row.predicted_arrival_at as string).toISOString(),
+          actual_arrival_at: row.actual_arrival_at ? new Date(row.actual_arrival_at as string).toISOString() : null,
+          actual_duration_sec: row.actual_duration_sec === null ? null : Number(row.actual_duration_sec),
+          residual_error_sec: row.residual_error_sec === null ? null : Number(row.residual_error_sec),
+          online_model_updated: Boolean(row.online_model_updated),
+        };
+        this.taskMap.set(task.id, task);
+        this.idempotencyMap.set(task.idempotency_key, task);
+      }
     } catch {
       this.mysqlConnected = false;
       this.mysqlPool = null;

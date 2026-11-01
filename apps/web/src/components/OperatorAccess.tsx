@@ -7,6 +7,7 @@ import { ArrowRight, CheckCircle2, Copy, LoaderCircle, LogOut, Plus, ShieldCheck
 
 type Workspace = { tenant_id: string; tenant_name: string; role: 'OWNER' | 'DISPATCHER' | 'REVIEWER' };
 type Session = { user: { display_name: string; email: string }; workspaces: Workspace[] };
+type FieldAgent = { agent_id: string; display_name: string; email: string; active: boolean };
 
 async function api(path: string, options: RequestInit = {}) {
   const response = await fetch(`/api${path}`, { credentials: 'include', ...options });
@@ -68,6 +69,8 @@ export function WorkspaceHome() {
   const [session, setSession] = useState<Session | null>(null);
   const [selectedId, setSelectedId] = useState('');
   const [tasks, setTasks] = useState<any[]>([]);
+  const [fieldAgents, setFieldAgents] = useState<FieldAgent[]>([]);
+  const [selectedFieldAgent, setSelectedFieldAgent] = useState('');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   const [dispatchNotice, setDispatchNotice] = useState('');
@@ -76,6 +79,11 @@ export function WorkspaceHome() {
   const [inviteLink, setInviteLink] = useState('');
   const [address, setAddress] = useState('');
   const [sending, setSending] = useState(false);
+  const [fieldAgentId, setFieldAgentId] = useState('');
+  const [fieldAgentName, setFieldAgentName] = useState('');
+  const [fieldAgentEmail, setFieldAgentEmail] = useState('');
+  const [fieldAgentPassword, setFieldAgentPassword] = useState('');
+  const [fieldAgentNotice, setFieldAgentNotice] = useState('');
 
   useEffect(() => {
     api('/v1/auth/operator/me').then(({ response, data }) => {
@@ -92,6 +100,16 @@ export function WorkspaceHome() {
     api(`/v1/workspaces/${workspace.tenant_id}/tasks`).then(({ response, data }) => {
       if (response.ok) setTasks(data.data || []);
     });
+  }, [workspace]);
+
+  const loadFieldAgents = async (workspaceId: string) => {
+    const { response, data } = await api(`/v1/workspaces/${workspaceId}/field-agents`);
+    if (response.ok) setFieldAgents(data.data || []);
+  };
+  useEffect(() => {
+    if (!workspace) return;
+    loadFieldAgents(workspace.tenant_id);
+    setSelectedFieldAgent('');
   }, [workspace]);
 
   async function signOut() {
@@ -116,7 +134,7 @@ export function WorkspaceHome() {
     if (!workspace || !address.trim()) return;
     setSending(true); setDispatchNotice('');
     const { response, data } = await api(`/v1/workspaces/${workspace.tenant_id}/dispatch`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `workspace_${Date.now()}` }, body: JSON.stringify({ raw_address: address }),
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `workspace_${Date.now()}` }, body: JSON.stringify({ raw_address: address, ...(selectedFieldAgent ? { field_agent_id: selectedFieldAgent } : {}) }),
     });
     setSending(false);
     if (!response.ok) { setDispatchNotice(data.error || 'Unable to create dispatch plan.'); return; }
@@ -126,9 +144,42 @@ export function WorkspaceHome() {
     if (refreshed.response.ok) setTasks(refreshed.data.data || []);
   }
 
+  async function provisionFieldAgent(event: FormEvent) {
+    event.preventDefault();
+    if (!workspace) return;
+    setFieldAgentNotice('');
+    const { response, data } = await api(`/v1/workspaces/${workspace.tenant_id}/field-agents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_id: fieldAgentId, display_name: fieldAgentName, email: fieldAgentEmail, password: fieldAgentPassword }),
+    });
+    if (!response.ok) { setFieldAgentNotice(data.error || 'Unable to provision this field agent.'); return; }
+    setFieldAgentNotice(`${data.agent.display_name} can now sign in to the field app.`);
+    setFieldAgentId(''); setFieldAgentName(''); setFieldAgentEmail(''); setFieldAgentPassword('');
+    await loadFieldAgents(workspace.tenant_id);
+  }
+
   if (loading || !session) return <main className="workspace-loading"><LoaderCircle className="spin" size={22} /> Checking secure workspace access…</main>;
   if (!workspace) return <main className="workspace-loading">Your account has no active workspace. Ask a pilot owner for an invitation.</main>;
   const canDispatch = workspace.role === 'OWNER' || workspace.role === 'DISPATCHER';
 
-  return <main className="workspace-page"><header className="workspace-header"><Link href="/" className="public-brand"><span>RG</span> ResolveGrid</Link><div className="workspace-user"><span>{session.user.display_name}</span><button onClick={signOut}><LogOut size={15} /> Sign out</button></div></header><section className="workspace-hero"><div><p className="public-kicker"><span /> Approved pilot workspace</p><h1>{workspace.tenant_name}</h1><p>{workspace.role.toLowerCase()} access · Operations are attributed to your workspace.</p></div><div className="workspace-switcher">{session.workspaces.map((item) => <button key={item.tenant_id} onClick={() => setSelectedId(item.tenant_id)} className={item.tenant_id === workspace.tenant_id ? 'active' : ''}>{item.tenant_name}</button>)}</div></section><section className="workspace-grid"><article className="workspace-panel dispatch-workspace"><p className="public-kicker">Dispatch</p><h2>Create a workspace dispatch plan</h2><p>Resolve an address and create a plan inside this protected workspace.</p>{canDispatch ? <form onSubmit={createDispatch}><textarea value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Paste an address, landmark, or delivery note" required /><button className="public-primary" disabled={sending}>{sending ? <LoaderCircle className="spin" size={16} /> : <>Create plan <ArrowRight size={16} /></>}</button></form> : <p className="workspace-muted">Reviewer access can view activity but cannot create dispatch plans.</p>}{dispatchNotice && <p className="workspace-message">{dispatchNotice}</p>}<Link href="/console" className="inline-link">Open public product demo <ArrowRight size={15} /></Link></article><article className="workspace-panel"><p className="public-kicker">Recent activity</p><h2>{tasks.length ? `${tasks.length} workspace plan${tasks.length === 1 ? '' : 's'}` : 'No plans yet'}</h2><div className="task-list">{tasks.slice(0, 5).map((task) => <div key={task.id}><strong>{task.resolved_postcode}</strong><span>{task.status.replaceAll('_', ' ')} · {task.assigned_agent_callsign || 'Assignment pending'}</span></div>)}{!tasks.length && <p className="workspace-muted">Your protected dispatch plans will appear here.</p>}</div></article>{workspace.role === 'OWNER' && <article className="workspace-panel invite-panel"><p className="public-kicker">Team access</p><h2>Invite an operator</h2><p>For this pilot, share the generated one-time link through an approved channel. Email sending can be connected next.</p><form onSubmit={createInvite}><input type="email" placeholder="teammate@example.com" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} required /><select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as 'DISPATCHER' | 'REVIEWER')}><option value="DISPATCHER">Dispatcher</option><option value="REVIEWER">Reviewer</option></select><button className="public-secondary"><Plus size={15} /> Create invitation</button></form>{inviteLink && <div className="invite-result"><CheckCircle2 size={17} /><div><strong>Invitation ready</strong><code>{inviteLink}</code></div><button aria-label="Copy invitation link" onClick={() => navigator.clipboard.writeText(inviteLink)}><Copy size={15} /></button></div>}{notice && <p className="workspace-notice">{notice}</p>}</article>}</section><footer className="workspace-footer"><Users size={15} /> Invitation-only pilot access · Field agents continue in the mobile app.</footer></main>;
+  return (
+    <main className="workspace-page">
+      <header className="workspace-header"><Link href="/" className="public-brand"><span>RG</span> ResolveGrid</Link><div className="workspace-user"><span>{session.user.display_name}</span><button onClick={signOut}><LogOut size={15} /> Sign out</button></div></header>
+      <section className="workspace-hero"><div><p className="public-kicker"><span /> Approved pilot workspace</p><h1>{workspace.tenant_name}</h1><p>{workspace.role.toLowerCase()} access · Operations are attributed to your workspace.</p></div><div className="workspace-switcher">{session.workspaces.map((item) => <button key={item.tenant_id} onClick={() => setSelectedId(item.tenant_id)} className={item.tenant_id === workspace.tenant_id ? 'active' : ''}>{item.tenant_name}</button>)}</div></section>
+      <section className="workspace-grid">
+        <article className="workspace-panel dispatch-workspace">
+          <p className="public-kicker">Dispatch</p><h2>Create a workspace dispatch plan</h2><p>Resolve an address, assign a field agent when needed, and create a protected plan.</p>
+          {canDispatch ? <form onSubmit={createDispatch}><textarea value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Paste an address, landmark, or delivery note" required /><select aria-label="Assigned field agent" value={selectedFieldAgent} onChange={(event) => setSelectedFieldAgent(event.target.value)}><option value="">No field-agent assignment</option>{fieldAgents.filter((agent) => agent.active).map((agent) => <option key={agent.agent_id} value={agent.agent_id}>{agent.display_name} · {agent.agent_id}</option>)}</select><button className="public-primary" disabled={sending}>{sending ? <LoaderCircle className="spin" size={16} /> : <>Create plan <ArrowRight size={16} /></>}</button></form> : <p className="workspace-muted">Reviewer access can view activity but cannot create dispatch plans.</p>}
+          {!fieldAgents.length && <p className="workspace-muted">No field agents are linked yet. An Owner can create one below.</p>}{dispatchNotice && <p className="workspace-message">{dispatchNotice}</p>}<Link href="/console" className="inline-link">Open public product demo <ArrowRight size={15} /></Link>
+        </article>
+        <article className="workspace-panel"><p className="public-kicker">Recent activity</p><h2>{tasks.length ? `${tasks.length} workspace plan${tasks.length === 1 ? '' : 's'}` : 'No plans yet'}</h2><div className="task-list">{tasks.slice(0, 5).map((task) => <div key={task.id}><strong>{task.resolved_postcode}</strong><span>{task.status.replaceAll('_', ' ')} · {task.assigned_agent_callsign || 'Assignment pending'}</span></div>)}{!tasks.length && <p className="workspace-muted">Your protected dispatch plans will appear here.</p>}</div></article>
+        {workspace.role === 'OWNER' && <>
+          <article className="workspace-panel invite-panel"><p className="public-kicker">Field team</p><h2>Provision a field agent</h2><p>This creates a mobile-only field identity and links it directly to {workspace.tenant_name}.</p><form onSubmit={provisionFieldAgent} className="field-agent-form"><input value={fieldAgentId} onChange={(event) => setFieldAgentId(event.target.value)} placeholder="field_yusuf_01" required /><input value={fieldAgentName} onChange={(event) => setFieldAgentName(event.target.value)} placeholder="Field agent name" required /><input type="email" value={fieldAgentEmail} onChange={(event) => setFieldAgentEmail(event.target.value)} placeholder="field@example.com" required /><input type="password" minLength={12} value={fieldAgentPassword} onChange={(event) => setFieldAgentPassword(event.target.value)} placeholder="Temporary password (12+ chars)" required /><button className="public-secondary"><Plus size={15} /> Add field agent</button></form>{fieldAgents.length > 0 && <p className="workspace-muted">Linked: {fieldAgents.map((agent) => `${agent.display_name} (${agent.agent_id})`).join(', ')}</p>}{fieldAgentNotice && <p className="workspace-notice">{fieldAgentNotice}</p>}</article>
+          <article className="workspace-panel invite-panel"><p className="public-kicker">Team access</p><h2>Invite an operator</h2><p>Share the generated one-time link through an approved channel. Email sending can be connected next.</p><form onSubmit={createInvite}><input type="email" placeholder="teammate@example.com" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} required /><select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as 'DISPATCHER' | 'REVIEWER')}><option value="DISPATCHER">Dispatcher</option><option value="REVIEWER">Reviewer</option></select><button className="public-secondary"><Plus size={15} /> Create invitation</button></form>{inviteLink && <div className="invite-result"><CheckCircle2 size={17} /><div><strong>Invitation ready</strong><code>{inviteLink}</code></div><button aria-label="Copy invitation link" onClick={() => navigator.clipboard.writeText(inviteLink)}><Copy size={15} /></button></div>}{notice && <p className="workspace-notice">{notice}</p>}</article>
+        </>}
+      </section>
+      <footer className="workspace-footer"><Users size={15} /> Invitation-only pilot access · Assigned field agents continue work in the mobile app.</footer>
+    </main>
+  );
 }
