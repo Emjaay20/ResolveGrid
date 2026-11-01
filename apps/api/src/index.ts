@@ -11,6 +11,7 @@ import { dispatchService } from './services/dispatchService';
 import { verificationService } from './services/verificationService';
 import { externalTelemetry } from './services/externalTelemetry';
 import { fieldAuthService } from './services/fieldAuthService';
+import { WorkspaceRole, workspaceAuthService } from './services/workspaceAuthService';
 
 export const app = express();
 app.set('trust proxy', 1);
@@ -59,6 +60,44 @@ function requireFieldAdminAccess(req: Request, res: Response): boolean {
     return false;
   }
   return true;
+}
+
+function setOperatorSessionCookie(res: Response, value: string): void {
+  res.cookie('rg_operator_session', value, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 8 * 60 * 60 * 1000,
+    path: '/',
+  });
+}
+
+function clearOperatorSessionCookie(res: Response): void {
+  res.clearCookie('rg_operator_session', {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+  });
+}
+
+async function requireWorkspaceAccess(
+  req: Request,
+  res: Response,
+  workspaceId: string,
+  roles?: WorkspaceRole[]
+) {
+  try {
+    const session = await workspaceAuthService.authorize(req.header('Cookie'), workspaceId, roles);
+    if (!session) {
+      res.status(403).json({ error: 'You do not have access to this workspace action.' });
+      return null;
+    }
+    return session;
+  } catch {
+    res.status(503).json({ error: 'Workspace access is temporarily unavailable.' });
+    return null;
+  }
 }
 
 // ============================================================================
@@ -351,6 +390,159 @@ app.get('/v1/field/me', (req: Request, res: Response) => {
   res.json({ agent: session });
 });
 
+// ============================================================================
+// 4c. Invitation-only Operator Workspaces
+// ============================================================================
+// Bootstrap is deliberately server-admin controlled. Public registration would
+// make a field operations pilot harder to audit before its organisation model is
+// fully proven. Owners use invitations for every subsequent operator account.
+app.post('/v1/workspaces/bootstrap', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'workspace-bootstrap', 3, 60 * 60 * 1000)) return;
+  if (!requireFieldAdminAccess(req, res)) return;
+  const { workspace_id, workspace_name, owner_email, owner_name, password } = req.body || {};
+  if (
+    typeof workspace_id !== 'string' ||
+    typeof workspace_name !== 'string' ||
+    typeof owner_email !== 'string' ||
+    typeof owner_name !== 'string' ||
+    typeof password !== 'string'
+  ) {
+    res.status(400).json({ error: 'workspace_id, workspace_name, owner_email, owner_name, and password are required.' });
+    return;
+  }
+  try {
+    const result = await workspaceAuthService.bootstrapWorkspace({
+      workspaceId: workspace_id,
+      workspaceName: workspace_name,
+      ownerEmail: owner_email,
+      ownerName: owner_name,
+      password,
+    });
+    setOperatorSessionCookie(res, result.cookie);
+    res.status(201).json({ session: result.session });
+  } catch (error) {
+    res.status(422).json({ error: error instanceof Error ? error.message : 'Unable to create this workspace.' });
+  }
+});
+
+app.post('/v1/auth/operator/login', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'operator-login', 10, 15 * 60 * 1000)) return;
+  const { email, password } = req.body || {};
+  if (typeof email !== 'string' || typeof password !== 'string') {
+    res.status(400).json({ error: 'email and password are required.' });
+    return;
+  }
+  try {
+    const result = await workspaceAuthService.login(email, password);
+    if (!result) {
+      res.status(401).json({ error: 'Invalid operator email or password.' });
+      return;
+    }
+    setOperatorSessionCookie(res, result.cookie);
+    res.json({ session: result.session });
+  } catch {
+    res.status(503).json({ error: 'Operator sign-in is temporarily unavailable.' });
+  }
+});
+
+app.post('/v1/auth/operator/logout', async (req: Request, res: Response) => {
+  try {
+    await workspaceAuthService.logout(req.header('Cookie'));
+  } catch {
+    // Clear a stale browser session even if the backing database is unavailable.
+  }
+  clearOperatorSessionCookie(res);
+  res.status(204).end();
+});
+
+app.get('/v1/auth/operator/me', async (req: Request, res: Response) => {
+  try {
+    const session = await workspaceAuthService.sessionFromCookie(req.header('Cookie'));
+    if (!session) {
+      res.status(401).json({ error: 'Sign in to access a pilot workspace.' });
+      return;
+    }
+    res.json({ session });
+  } catch {
+    res.status(503).json({ error: 'Workspace access is temporarily unavailable.' });
+  }
+});
+
+app.post('/v1/workspaces/:workspaceId/invitations', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'workspace-invite', 20, 60 * 60 * 1000)) return;
+  const workspaceId = String(req.params.workspaceId);
+  const session = await requireWorkspaceAccess(req, res, workspaceId, ['OWNER']);
+  if (!session) return;
+  const { email, role } = req.body || {};
+  if (typeof email !== 'string' || (role !== 'DISPATCHER' && role !== 'REVIEWER')) {
+    res.status(400).json({ error: 'A valid email and either DISPATCHER or REVIEWER role are required.' });
+    return;
+  }
+  try {
+    const invitation = await workspaceAuthService.createInvitation({
+      actor: session,
+      tenantId: workspaceId,
+      email,
+      role,
+    });
+    // Email delivery is intentionally separate. The owner can copy this one-time
+    // URL into an approved channel until a verified sender domain is connected.
+    res.status(201).json({
+      invitation: {
+        id: invitation.id,
+        email: email.trim().toLowerCase(),
+        role,
+        expires_at: invitation.expires_at,
+        accept_url: `/join?token=${encodeURIComponent(invitation.token)}`,
+      },
+    });
+  } catch (error) {
+    res.status(422).json({ error: error instanceof Error ? error.message : 'Unable to create this invitation.' });
+  }
+});
+
+app.post('/v1/workspace-invitations/accept', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'workspace-invite-accept', 10, 15 * 60 * 1000)) return;
+  const { token, display_name, password } = req.body || {};
+  if (typeof token !== 'string' || typeof display_name !== 'string' || typeof password !== 'string') {
+    res.status(400).json({ error: 'token, display_name, and password are required.' });
+    return;
+  }
+  try {
+    const result = await workspaceAuthService.acceptInvitation({ token, displayName: display_name, password });
+    setOperatorSessionCookie(res, result.cookie);
+    res.json({ session: result.session });
+  } catch (error) {
+    res.status(422).json({ error: error instanceof Error ? error.message : 'Unable to accept this invitation.' });
+  }
+});
+
+app.get('/v1/workspaces/:workspaceId/tasks', async (req: Request, res: Response) => {
+  const workspaceId = String(req.params.workspaceId);
+  const session = await requireWorkspaceAccess(req, res, workspaceId);
+  if (!session) return;
+  const tasks = Array.from(store.taskMap.values())
+    .filter((task) => task.tenant_id === workspaceId)
+    .sort((a, b) => new Date(b.dispatched_at).getTime() - new Date(a.dispatched_at).getTime());
+  res.json({ workspace: session.workspaces.find((workspace) => workspace.tenant_id === workspaceId), data: tasks });
+});
+
+app.post('/v1/workspaces/:workspaceId/dispatch', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'workspace-dispatch', 30, 5 * 60 * 1000)) return;
+  const workspaceId = String(req.params.workspaceId);
+  const session = await requireWorkspaceAccess(req, res, workspaceId, ['OWNER', 'DISPATCHER']);
+  if (!session) return;
+  const { raw_address, postcode } = req.body || {};
+  const dispatched = await dispatchService.dispatchTask({
+    idempotencyKey: req.header('Idempotency-Key') || `workspace_${crypto.randomUUID()}`,
+    tenantId: workspaceId,
+    rawAddress: raw_address ? String(raw_address) : undefined,
+    postcode: postcode ? String(postcode) : undefined,
+    overrideNipostKey: extractNipostKey(req),
+  });
+  res.json({ ...dispatched, workspace_user: session.user });
+});
+
 app.post('/v1/tasks/dispatch', async (req: Request, res: Response) => {
   if (!enforceWriteRate(req, res, 'dispatch', 12, 5 * 60 * 1000)) return;
   const idempotencyKey =
@@ -609,7 +801,12 @@ app.post('/v1/evals/run', async (req: Request, res: Response) => {
 const PORT = Number(process.env.PORT || 4000);
 
 if (require.main === module) {
-  store.initialize().then(() => {
+  store.initialize().then(async () => {
+    try {
+      await workspaceAuthService.ensureSchema();
+    } catch (error) {
+      console.error('[ResolveGrid API] Workspace access schema unavailable:', error instanceof Error ? error.message : error);
+    }
     app.listen(PORT, '0.0.0.0', () => {
       console.log(
         `[ResolveGrid API] Listening on http://0.0.0.0:${PORT} | MySQL: ${store.mysqlConnected} | Redis: ${store.redisConnected}`
