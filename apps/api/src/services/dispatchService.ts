@@ -238,6 +238,10 @@ export class DispatchService {
     const tenant =
       TENANT_PROFILES[params.tenantId || 'tenant_logistics_ng'] ||
       TENANT_PROFILES.tenant_logistics_ng;
+    // A pilot workspace can borrow a known dispatch policy without becoming
+    // part of the shared demo tenant. Preserve the supplied workspace ID on
+    // every task so its activity and access stay isolated.
+    const operationTenantId = params.tenantId || tenant.id;
 
     // 2. Resolve Destination NIPOST Postcode
     let resolvedLocation: NipostLookupResult | null = null;
@@ -418,7 +422,7 @@ export class DispatchService {
     const taskRecord: DispatchTaskRecord = {
       id: taskId,
       idempotency_key: params.idempotencyKey,
-      tenant_id: tenant.id,
+      tenant_id: operationTenantId,
       raw_input_address: params.rawAddress || resolvedLocation.recent_house_address?.recent || resolvedLocation.postcode,
       resolved_postcode: resolvedLocation.postcode,
       legacy_postal_code: resolvedLocation.legacy_postal_code,

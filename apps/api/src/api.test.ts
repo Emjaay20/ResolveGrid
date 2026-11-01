@@ -96,3 +96,13 @@ test('provisioned field identities pass the field-agent check before source vali
     store.fieldAgentById.delete(accountId);
   }
 });
+
+test('dispatch plans retain a pilot workspace ID while using a fallback dispatch policy', async () => {
+  const dispatched = await dispatchService.dispatchTask({
+    idempotencyKey: `workspace_scope_${Date.now()}`,
+    tenantId: 'pilot_workspace_test',
+    postcode: 'FC-02-A09-DB-09',
+  });
+
+  assert.equal(dispatched.task.tenant_id, 'pilot_workspace_test');
+});
