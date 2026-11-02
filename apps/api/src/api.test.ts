@@ -8,6 +8,7 @@ import { nipostClient } from './clients/nipostClient';
 import { store } from './config/datastore';
 import { dispatchService } from './services/dispatchService';
 import { verificationService } from './services/verificationService';
+import { taskLifecycleService } from './services/taskLifecycleService';
 
 test('nipostClient resolves deterministic postcode fixtures with L3 attributes', async () => {
   const ekiti = await nipostClient.lookupPostcode('EK-01-A03-FK-01', 3);
@@ -117,4 +118,10 @@ test('a workspace dispatch can be assigned to a named field agent', async () => 
 
   assert.equal(dispatched.task.assigned_agent_id, 'field_pilot_01');
   assert.equal(dispatched.task.assigned_agent_callsign, 'Pilot Field Agent');
+  assert.equal(dispatched.task.status, 'ASSIGNED');
+
+  const accepted = await taskLifecycleService.fieldAction(dispatched.task.id, 'field_pilot_01', 'ACCEPTED');
+  assert.equal(accepted.status, 'ACCEPTED');
+  const enRoute = await taskLifecycleService.fieldAction(dispatched.task.id, 'field_pilot_01', 'EN_ROUTE');
+  assert.equal(enRoute.status, 'EN_ROUTE');
 });

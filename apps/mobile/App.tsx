@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   SafeAreaView,
@@ -10,8 +10,12 @@ import {
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
+import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
+const SESSION_STORAGE_KEY = 'resolvegrid.field.session.v1';
+const QUEUE_STORAGE_KEY = 'resolvegrid.field.evidence-queue.v1';
 
 type Screen = 'home' | 'capture' | 'account';
 
@@ -44,7 +48,7 @@ type FieldTask = {
   resolved_postcode: string;
   assigned_agent_callsign: string;
   predicted_arrival_at: string;
-  status: 'DISPATCHED' | 'EN_ROUTE';
+  status: 'DISPATCHED' | 'ASSIGNED' | 'ACCEPTED' | 'EN_ROUTE';
 };
 
 const shortSource = (source?: string) =>
@@ -77,6 +81,29 @@ export default function ResolveGridMobileApp() {
 
   const fieldName = fieldSession?.agent.display_name?.split(' ')[0] || 'Field agent';
 
+  useEffect(() => {
+    Promise.all([
+      SecureStore.getItemAsync(SESSION_STORAGE_KEY),
+      AsyncStorage.getItem(QUEUE_STORAGE_KEY),
+    ]).then(([savedSession, savedQueue]) => {
+      if (savedSession) {
+        try { setFieldSession(JSON.parse(savedSession)); } catch { SecureStore.deleteItemAsync(SESSION_STORAGE_KEY); }
+      }
+      if (savedQueue) {
+        try { setQueue(JSON.parse(savedQueue)); } catch { AsyncStorage.removeItem(QUEUE_STORAGE_KEY); }
+      }
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (fieldSession) SecureStore.setItemAsync(SESSION_STORAGE_KEY, JSON.stringify(fieldSession)).catch(() => {});
+    else SecureStore.deleteItemAsync(SESSION_STORAGE_KEY).catch(() => {});
+  }, [fieldSession]);
+
+  useEffect(() => {
+    AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue)).catch(() => {});
+  }, [queue]);
+
   const loadAssignedTasks = async (token = fieldSession?.access_token) => {
     if (!token) return;
     try {
@@ -102,6 +129,28 @@ export default function ResolveGridMobileApp() {
     });
     setNotice(`Task ${task.id} opened. Capture evidence when you arrive.`);
     setScreen('capture');
+  };
+
+  const updateActiveTask = async (action: 'accepted' | 'en_route' | 'declined') => {
+    if (!fieldSession || !activeTask) return;
+    setIsWorking(true);
+    try {
+      const response = await fetch(`${API_BASE}/v1/field/tasks/${activeTask.id}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${fieldSession.access_token}` },
+        body: JSON.stringify({}),
+      });
+      const data = await response.json();
+      if (!response.ok) { setNotice(data.error || 'Unable to update this task.'); return; }
+      if (action === 'declined') {
+        setActiveTask(null); setScreen('home'); setNotice('Task declined. Your dispatcher can reassign it.');
+      } else {
+        setActiveTask(data.task); setNotice(action === 'accepted' ? 'Task accepted. Start your journey when you leave.' : 'Journey started. Capture evidence when you arrive.');
+      }
+      await loadAssignedTasks();
+    } catch {
+      setNotice('This task update needs a connection.');
+    } finally { setIsWorking(false); }
   };
 
   const captureGps = async (): Promise<Coordinates | null> => {
@@ -440,6 +489,11 @@ export default function ResolveGridMobileApp() {
               {activeTask && <Text style={styles.assignedTaskLabel}>ASSIGNED TASK · {activeTask.id}</Text>}
               {resolvedPlace && <Text style={styles.sourceLabel}>{shortSource(resolvedPlace.source)}</Text>}
             </View>
+            {activeTask?.status !== 'EN_ROUTE' && <View style={styles.taskActionCard}>
+              <Text style={styles.cardTitle}>{activeTask?.status === 'ACCEPTED' ? 'Ready to start?' : 'Accept this assigned plan'}</Text>
+              <Text style={styles.helper}>{activeTask?.status === 'ACCEPTED' ? 'Mark yourself en route before leaving for the destination.' : 'Accept only when you can complete this visit.'}</Text>
+              <View style={styles.taskButtons}>{activeTask?.status !== 'ACCEPTED' && <TouchableOpacity disabled={isWorking} onPress={() => updateActiveTask('accepted')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Accept</Text></TouchableOpacity>}{activeTask?.status === 'ACCEPTED' && <TouchableOpacity disabled={isWorking} onPress={() => updateActiveTask('en_route')} style={styles.primaryButton}><Text style={styles.primaryButtonText}>Start journey</Text></TouchableOpacity>}{activeTask?.status !== 'ACCEPTED' && <TouchableOpacity disabled={isWorking} onPress={() => updateActiveTask('declined')} style={styles.declineButton}><Text style={styles.declineText}>Decline</Text></TouchableOpacity>}</View>
+            </View>}
             <View style={styles.card}>
               <View style={styles.cardHeading}><Text style={styles.cardTitle}>Visit details</Text><Text style={styles.step}>02</Text></View>
               <Text style={styles.label}>Device location</Text>
@@ -555,6 +609,10 @@ const styles = StyleSheet.create({
   visitCode: { color: '#fffdf8', fontFamily: 'monospace', fontSize: 22, fontWeight: '800', letterSpacing: 0.8 },
   visitAddress: { color: '#c9d0cb', fontSize: 13, marginTop: 7, lineHeight: 18 },
   assignedTaskLabel: { color: '#b9d7c8', fontFamily: 'monospace', fontSize: 10, fontWeight: '800', marginTop: 12 },
+  taskActionCard: { backgroundColor: COLORS.paper, borderColor: COLORS.line, borderWidth: 1, borderRadius: 14, padding: 16, marginBottom: 15 },
+  taskButtons: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  declineButton: { alignItems: 'center', borderColor: '#d8b8aa', borderWidth: 1, borderRadius: 10, justifyContent: 'center', minHeight: 44, paddingHorizontal: 14 },
+  declineText: { color: '#99492d', fontSize: 13, fontWeight: '800' },
   gpsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderColor: '#d9d4c9', borderWidth: 1, backgroundColor: '#fcfaf5', borderRadius: 10, padding: 12 },
   gpsTitle: { color: COLORS.ink, fontSize: 13, fontWeight: '700' },
   gpsMeta: { color: COLORS.muted, fontFamily: 'monospace', fontSize: 10, marginTop: 4 },

@@ -13,6 +13,7 @@ import { externalTelemetry } from './services/externalTelemetry';
 import { fieldAuthService } from './services/fieldAuthService';
 import { WorkspaceRole, workspaceAuthService } from './services/workspaceAuthService';
 import { workspaceFieldTeamService } from './services/workspaceFieldTeamService';
+import { taskLifecycleService } from './services/taskLifecycleService';
 
 export const app = express();
 app.set('trust proxy', 1);
@@ -423,9 +424,34 @@ app.get('/v1/field/tasks', (req: Request, res: Response) => {
     return;
   }
   const tasks = Array.from(store.taskMap.values())
-    .filter((task) => task.assigned_agent_id === session.agent_id && ['DISPATCHED', 'EN_ROUTE'].includes(task.status))
+    .filter((task) => task.assigned_agent_id === session.agent_id && ['DISPATCHED', 'ASSIGNED', 'ACCEPTED', 'EN_ROUTE'].includes(task.status))
     .sort((a, b) => new Date(b.dispatched_at).getTime() - new Date(a.dispatched_at).getTime());
   res.json({ data: tasks });
+});
+
+app.post('/v1/field/tasks/:taskId/:action', async (req: Request, res: Response) => {
+  if (!enforceWriteRate(req, res, 'field-task-action', 30, 5 * 60 * 1000)) return;
+  const session = fieldAuthService.verifyAuthorization(req.header('Authorization'));
+  if (!session) {
+    res.status(401).json({ error: 'A valid field-agent bearer token is required.' });
+    return;
+  }
+  const action = String(req.params.action).toUpperCase();
+  if (!['ACCEPTED', 'EN_ROUTE', 'DECLINED'].includes(action)) {
+    res.status(400).json({ error: 'Choose ACCEPTED, EN_ROUTE, or DECLINED.' });
+    return;
+  }
+  try {
+    const task = await taskLifecycleService.fieldAction(
+      String(req.params.taskId),
+      session.agent_id,
+      action as 'ACCEPTED' | 'EN_ROUTE' | 'DECLINED',
+      typeof req.body?.note === 'string' ? req.body.note.slice(0, 500) : undefined
+    );
+    res.json({ task });
+  } catch (error) {
+    res.status(422).json({ error: error instanceof Error ? error.message : 'Unable to update this task.' });
+  }
 });
 
 // ============================================================================
@@ -635,6 +661,23 @@ app.post('/v1/workspaces/:workspaceId/dispatch', async (req: Request, res: Respo
     assignedFieldAgent,
   });
   res.json({ ...dispatched, workspace_user: session.user });
+});
+
+app.post('/v1/workspaces/:workspaceId/tasks/:taskId/cancel', async (req: Request, res: Response) => {
+  const workspaceId = String(req.params.workspaceId);
+  const session = await requireWorkspaceAccess(req, res, workspaceId, ['OWNER', 'DISPATCHER']);
+  if (!session) return;
+  try {
+    const task = await taskLifecycleService.cancel(
+      String(req.params.taskId),
+      workspaceId,
+      session.user.id,
+      typeof req.body?.note === 'string' ? req.body.note.slice(0, 500) : undefined
+    );
+    res.json({ task });
+  } catch (error) {
+    res.status(422).json({ error: error instanceof Error ? error.message : 'Unable to cancel this task.' });
+  }
 });
 
 app.post('/v1/tasks/dispatch', async (req: Request, res: Response) => {
@@ -899,6 +942,7 @@ if (require.main === module) {
     try {
       await workspaceAuthService.ensureSchema();
       await workspaceFieldTeamService.ensureSchema();
+      await taskLifecycleService.ensureSchema();
     } catch (error) {
       console.error('[ResolveGrid API] Workspace access schema unavailable:', error instanceof Error ? error.message : error);
     }

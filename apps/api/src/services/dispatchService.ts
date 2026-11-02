@@ -438,7 +438,7 @@ export class DispatchService {
       champion_lgbm_eta_sec: winningCandidate.champion_lgbm_eta_sec,
       challenger_river_eta_sec: winningCandidate.challenger_river_eta_sec,
       dispatch_strategy: dispatchStrategy,
-      status: 'DISPATCHED',
+      status: params.assignedFieldAgent ? 'ASSIGNED' : 'DISPATCHED',
       dispatched_at: now.toISOString(),
       predicted_arrival_at: predictedArrival.toISOString(),
       actual_arrival_at: null,
@@ -463,7 +463,7 @@ export class DispatchService {
               assigned_agent_id, candidate_count, road_distance_m, osrm_base_duration_sec, gate_delay_sec,
               weather_rain_mm, predicted_eta_sec, champion_lgbm_eta_sec, challenger_river_eta_sec,
               dispatch_strategy, status, predicted_arrival_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DISPATCHED', ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               taskRecord.id,
               taskRecord.idempotency_key,
@@ -481,6 +481,7 @@ export class DispatchService {
               taskRecord.champion_lgbm_eta_sec,
               taskRecord.challenger_river_eta_sec,
               taskRecord.dispatch_strategy,
+              taskRecord.status,
               new Date(taskRecord.predicted_arrival_at),
             ]
           );

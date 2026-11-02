@@ -44,7 +44,7 @@ export interface DispatchTaskRecord {
   champion_lgbm_eta_sec: number;
   challenger_river_eta_sec: number;
   dispatch_strategy: 'ML_HYBRID_CHAMPION_CHALLENGER' | 'FALLBACK_HAVERSINE_CIRCUIT_BREAKER';
-  status: 'DISPATCHED' | 'EN_ROUTE' | 'ARRIVED_VERIFIED' | 'CANCELLED';
+  status: 'DISPATCHED' | 'ASSIGNED' | 'ACCEPTED' | 'EN_ROUTE' | 'ARRIVED_VERIFIED' | 'DECLINED' | 'CANCELLED';
   dispatched_at: string;
   predicted_arrival_at: string;
   actual_arrival_at: string | null;
