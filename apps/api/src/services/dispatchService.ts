@@ -13,6 +13,12 @@ import {
 import { nipostClient } from '../clients/nipostClient';
 import { externalTelemetry } from './externalTelemetry';
 
+export class DispatchIdempotencyConflict extends Error {
+  constructor() {
+    super('This dispatch retry key is unavailable. Use a new key.');
+  }
+}
+
 export interface CandidateRankingItem {
   agent_id: string;
   callsign: string;
@@ -214,10 +220,12 @@ export class DispatchService {
     idempotent_replay: boolean;
   }> {
     const tStart = performance.now();
+    const operationTenantId = params.tenantId || TENANT_PROFILES.tenant_logistics_ng.id;
 
     // 1. Check Idempotency-Key
     const existingTask = store.idempotencyMap.get(params.idempotencyKey);
     if (existingTask) {
+      if (existingTask.tenant_id !== operationTenantId) throw new DispatchIdempotencyConflict();
       const loc =
         (await nipostClient.lookupPostcode(existingTask.resolved_postcode, 3, params.overrideNipostKey)) ||
         Array.from(store.postcodeMap.values())[0];
@@ -239,11 +247,6 @@ export class DispatchService {
     const tenant =
       TENANT_PROFILES[params.tenantId || 'tenant_logistics_ng'] ||
       TENANT_PROFILES.tenant_logistics_ng;
-    // A pilot workspace can borrow a known dispatch policy without becoming
-    // part of the shared demo tenant. Preserve the supplied workspace ID on
-    // every task so its activity and access stay isolated.
-    const operationTenantId = params.tenantId || tenant.id;
-
     // 2. Resolve Destination NIPOST Postcode
     let resolvedLocation: NipostLookupResult | null = null;
     if (params.postcode) {
@@ -448,6 +451,8 @@ export class DispatchService {
       route_geometry: primaryRoute.geometry,
     };
 
+    // Another request can claim the key while route and ETA lookups are running.
+    if (store.idempotencyMap.has(params.idempotencyKey)) throw new DispatchIdempotencyConflict();
     store.taskMap.set(taskRecord.id, taskRecord);
     store.idempotencyMap.set(params.idempotencyKey, taskRecord);
 

@@ -2,12 +2,12 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
-import express, { Request, Response } from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
 import { store, TENANT_PROFILES, INITIAL_AGENTS } from './config/datastore';
 import { nipostClient } from './clients/nipostClient';
-import { dispatchService } from './services/dispatchService';
+import { DispatchIdempotencyConflict, dispatchService } from './services/dispatchService';
 import { verificationService } from './services/verificationService';
 import { externalTelemetry } from './services/externalTelemetry';
 import { fieldAuthService } from './services/fieldAuthService';
@@ -703,7 +703,7 @@ app.post('/v1/workspaces/:workspaceId/field-agents', async (req: Request, res: R
   }
 });
 
-app.post('/v1/workspaces/:workspaceId/dispatch', async (req: Request, res: Response) => {
+app.post('/v1/workspaces/:workspaceId/dispatch', async (req: Request, res: Response, next: NextFunction) => {
   if (!enforceWriteRate(req, res, 'workspace-dispatch', 30, 5 * 60 * 1000)) return;
   const workspaceId = String(req.params.workspaceId);
   const session = await requireWorkspaceAccess(req, res, workspaceId, ['OWNER', 'DISPATCHER']);
@@ -724,15 +724,14 @@ app.post('/v1/workspaces/:workspaceId/dispatch', async (req: Request, res: Respo
     }
     assignedFieldAgent = { agentId: account.agent_id, displayName: account.display_name };
   }
-  const dispatched = await dispatchService.dispatchTask({
+  await dispatchService.dispatchTask({
     idempotencyKey: req.header('Idempotency-Key') || `workspace_${crypto.randomUUID()}`,
     tenantId: workspaceId,
     rawAddress: raw_address ? String(raw_address) : undefined,
     postcode: postcode ? String(postcode) : undefined,
     overrideNipostKey: extractNipostKey(req),
     assignedFieldAgent,
-  });
-  res.json({ ...dispatched, workspace_user: session.user });
+  }).then((dispatched) => res.json({ ...dispatched, workspace_user: session.user }), next);
 });
 
 app.post('/v1/workspaces/:workspaceId/tasks/:taskId/cancel', async (req: Request, res: Response) => {
@@ -752,7 +751,7 @@ app.post('/v1/workspaces/:workspaceId/tasks/:taskId/cancel', async (req: Request
   }
 });
 
-app.post('/v1/tasks/dispatch', async (req: Request, res: Response) => {
+app.post('/v1/tasks/dispatch', async (req: Request, res: Response, next: NextFunction) => {
   if (!enforceWriteRate(req, res, 'dispatch', 12, 5 * 60 * 1000)) return;
   const idempotencyKey =
     req.header('Idempotency-Key') ||
@@ -767,15 +766,13 @@ app.post('/v1/tasks/dispatch', async (req: Request, res: Response) => {
     return;
   }
 
-  const dispatched = await dispatchService.dispatchTask({
+  await dispatchService.dispatchTask({
     idempotencyKey: String(idempotencyKey),
     tenantId: requestedTenant,
     rawAddress: raw_address ? String(raw_address) : undefined,
     postcode: postcode ? String(postcode) : undefined,
     overrideNipostKey: extractNipostKey(req),
-  });
-
-  res.json(dispatched);
+  }).then((dispatched) => res.json(dispatched), next);
 });
 
 app.post('/v1/tasks/:id/verify-arrival', async (req: Request, res: Response) => {
@@ -1020,6 +1017,14 @@ app.post('/v1/evals/run', async (req: Request, res: Response) => {
     },
     cases: results,
   });
+});
+
+app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
+  if (error instanceof DispatchIdempotencyConflict) {
+    res.status(409).json({ error: error.message });
+    return;
+  }
+  next(error);
 });
 
 // ============================================================================

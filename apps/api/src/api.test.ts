@@ -4,6 +4,9 @@ dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+import { app } from './index';
 import { nipostClient } from './clients/nipostClient';
 import { store } from './config/datastore';
 import { dispatchService } from './services/dispatchService';
@@ -98,14 +101,26 @@ test('provisioned field identities pass the field-agent check before source vali
   }
 });
 
-test('dispatch plans retain a pilot workspace ID while using a fallback dispatch policy', async () => {
+test('public dispatch cannot replay a private workspace task', async (t) => {
+  const idempotencyKey = `workspace_scope_${Date.now()}`;
   const dispatched = await dispatchService.dispatchTask({
-    idempotencyKey: `workspace_scope_${Date.now()}`,
+    idempotencyKey,
     tenantId: 'pilot_workspace_test',
     postcode: 'FC-02-A09-DB-09',
   });
 
   assert.equal(dispatched.task.tenant_id, 'pilot_workspace_test');
+  const server = app.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  await once(server, 'listening');
+  const { port } = server.address() as AddressInfo;
+  const response = await fetch(`http://127.0.0.1:${port}/v1/tasks/dispatch`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenant_id: 'tenant_logistics_ng' }),
+  });
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: 'This dispatch retry key is unavailable. Use a new key.' });
 });
 
 test('a workspace dispatch can be assigned to a named field agent', async () => {

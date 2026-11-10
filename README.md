@@ -81,20 +81,18 @@ Never place either server secret in `EXPO_PUBLIC_*` variables or commit them to 
 Fixture-labelled results are deliberately blocked from accepting real field evidence. Use an
 approved NIPOST staging or production credential before carrying out operational field work.
 
-For an existing MySQL database, apply
-[`infra/mysql/migrations/001_field_observations.sql`](./infra/mysql/migrations/001_field_observations.sql)
-and [`infra/mysql/migrations/002_field_agents.sql`](./infra/mysql/migrations/002_field_agents.sql)
-before deploying this version. Also apply
-[`infra/mysql/migrations/006_demo_labels.sql`](./infra/mysql/migrations/006_demo_labels.sql) so the shared demo profiles
-and seed agents carry demo labels rather than names that imply a real organisation or person. Fresh Docker databases receive the same tables from `init.sql`.
+For an existing MySQL database, apply any pending [migrations](./infra/mysql/migrations) in
+numeric order through `006_demo_labels.sql` before deploying this version. Migrations
+`003` through `005` cover workspace access, field assignments, and task lifecycle.
+Fresh Docker databases initialize from `infra/mysql/init.sql`.
 
 ### Mobile release configuration
 
 Before making an Android or iOS build, copy [`apps/mobile/.env.example`](./apps/mobile/.env.example)
 to `apps/mobile/.env` and set `EXPO_PUBLIC_API_URL` to the full HTTPS API address of the deployed
 ResolveGrid service (including its `/api` path). This is a public client setting, not a place for NIPOST or field-agent
-server secrets. The current retry queue is deliberately session-only; a durable encrypted
-offline queue is the next mobile hardening step.
+server secrets. The retry queue persists across restarts using AsyncStorage.
+The field sign-in session is stored separately in SecureStore.
 
 ### Verified coordinates for Trashify
 
