@@ -84,7 +84,9 @@ approved NIPOST staging or production credential before carrying out operational
 For an existing MySQL database, apply
 [`infra/mysql/migrations/001_field_observations.sql`](./infra/mysql/migrations/001_field_observations.sql)
 and [`infra/mysql/migrations/002_field_agents.sql`](./infra/mysql/migrations/002_field_agents.sql)
-before deploying this version. Fresh Docker databases receive the same tables from `init.sql`.
+before deploying this version. Also apply
+[`infra/mysql/migrations/006_demo_labels.sql`](./infra/mysql/migrations/006_demo_labels.sql) so the shared demo profiles
+and seed agents carry demo labels rather than names that imply a real organisation or person. Fresh Docker databases receive the same tables from `init.sql`.
 
 ### Mobile release configuration
 
@@ -93,3 +95,9 @@ to `apps/mobile/.env` and set `EXPO_PUBLIC_API_URL` to the full HTTPS API addres
 ResolveGrid service (including its `/api` path). This is a public client setting, not a place for NIPOST or field-agent
 server secrets. The current retry queue is deliberately session-only; a durable encrypted
 offline queue is the next mobile hardening step.
+
+### Verified coordinates for Trashify
+
+Set a private `RESOLVEGRID_SERVICE_TOKEN` in the API service and in the trusted Trashify server. Trashify calls `GET /v1/nipost/lookup?code=…&level=3&strict=1` with `X-ResolveGrid-Service-Token`. Standard postcode lookup continues to support local fallbacks. Strict lookup returns `upstream_geometry_verified: true` only when NIPOST validates that postcode and supplies usable coordinates. It rejects local records and results that lack upstream geometry. Credentials remain server-side. Staging and live provenance are identified separately, and strict results are cached per credential.
+
+If official geometry is unavailable, pass both `lat` and `lng` to the same authenticated endpoint. ResolveGrid queries the official reverse search within 50 metres and requires the nearest building code to match the requested code. The response identifies the coordinates as the supplied device position using `coordinate_origin: RESIDENT_DEVICE_REVERSE_MATCH`; only the postcode match is verified by NIPOST. The application can use the returned digital postcode district for service scopes.

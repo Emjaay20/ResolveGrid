@@ -255,10 +255,10 @@ CREATE TABLE IF NOT EXISTS auth_audit_events (
 -- Seed Multi-Tenant Industry Profiles
 -- ============================================================================
 INSERT IGNORE INTO tenants (id, name, industry_vertical, max_search_radius_m, required_lookup_level, sla_target_sec, ml_profile) VALUES
-('tenant_logistics_ng', 'Partner Delivery Network', 'LOGISTICS', 6000, 3, 1800, 'logistics_eta_v1'),
-('tenant_fintech_kyc', 'Moniepoint / Tier-3 Merchant KYC', 'BANKING_KYC', 3000, 3, 900, 'kyc_verification_v1'),
-('tenant_emergency_fct', 'FCT NEMA / Rapid Medical Dispatch', 'EMERGENCY_RESPONSE', 10000, 3, 600, 'emergency_intercept_v1'),
-('tenant_field_infra', 'IHS Towers / Fiber Grid Maintenance', 'FIELD_OPS', 15000, 3, 3600, 'field_mttr_v1');
+('tenant_logistics_ng', 'Delivery Network (demo profile)', 'LOGISTICS', 6000, 3, 1800, 'logistics_eta_v1'),
+('tenant_fintech_kyc', 'Merchant KYC Verification (demo profile)', 'BANKING_KYC', 3000, 3, 900, 'kyc_verification_v1'),
+('tenant_emergency_fct', 'Emergency Medical Dispatch (demo profile)', 'EMERGENCY_RESPONSE', 10000, 3, 600, 'emergency_intercept_v1'),
+('tenant_field_infra', 'Field Infrastructure Maintenance (demo profile)', 'FIELD_OPS', 15000, 3, 3600, 'field_mttr_v1');
 
 -- ============================================================================
 -- Seed Verified Official NIPOST Reference Postcodes & Real Building Telemetry
@@ -298,18 +298,18 @@ INSERT IGNORE INTO building_telemetry (
 ('KN-21-A02-NS-05', TRUE, 75, 35, 'Nassarawa GRA walled complex; use main service gate on Audu Bako Way.', 22, 94.70);
 
 -- ============================================================================
--- Seed Real Field Agents & Couriers Across Abuja & Lagos Hubs
+-- Seed demo agents (illustrative positions, not real people or live GPS)
 -- ============================================================================
 INSERT IGNORE INTO agents (
   id, callsign, agent_type, city, latitude, longitude, h3_res8, velocity_kmh, heading_deg, capacity_units, active_load, skill_tags, rolling_1h_on_time_rate, status, telemetry_source
 ) VALUES
-('agent_abj_01', 'ABJ-RIDER-104 (Musa I.)', 'COURIER_BIKE', 'ABUJA', 9.0761000, 7.4759000, '8858194ad3fffff', 34.20, 115, 4, 1, '["EXPRESS_BOX", "COLD_CHAIN", "KYC_VERIFIED"]', 0.9820, 'AVAILABLE', 'HARDWARE_GPS'),
-('agent_abj_02', 'ABJ-RIDER-218 (Chinedu O.)', 'COURIER_BIKE', 'ABUJA', 9.0815000, 7.4662000, '8858194ad3fffff', 29.80, 240, 4, 0, '["EXPRESS_BOX", "FRAGILE"]', 0.9640, 'AVAILABLE', 'HARDWARE_GPS'),
-('agent_abj_03', 'ABJ-KYC-309 (Amina S.)', 'KYC_FIELD_OFFICER', 'ABUJA', 9.0412000, 7.4981000, '8858194a97fffff', 24.50, 45, 6, 1, '["KYC_TIER3", "BIOMETRIC_POS", "EXPRESS_BOX"]', 0.9910, 'AVAILABLE', 'HARDWARE_GPS'),
-('agent_abj_04', 'ABJ-VAN-412 (Ibrahim K.)', 'DISPATCH_VAN', 'ABUJA', 9.0685000, 7.4312000, '8858194f37fffff', 41.00, 90, 20, 3, '["BULK_CARGO", "EXPRESS_BOX", "FIELD_ENGINEER"]', 0.9530, 'AVAILABLE', 'HARDWARE_GPS'),
-('agent_abj_05', 'ABJ-MED-911 (FCT Rapid Unit 2)', 'EMERGENCY_UNIT', 'ABUJA', 9.0844000, 7.4892000, '8858194ac3fffff', 52.40, 180, 2, 0, '["ALS_CERTIFIED", "TRAUMA_KIT", "EXPRESS_BOX"]', 0.9950, 'AVAILABLE', 'HARDWARE_GPS'),
-('agent_los_01', 'LOS-RIDER-501 (Tunde A.)', 'COURIER_BIKE', 'LAGOS', 6.4451000, 3.4689000, '885886369bfffff', 27.60, 75, 4, 1, '["EXPRESS_BOX", "COLD_CHAIN", "LEKKI_PASS"]', 0.9780, 'AVAILABLE', 'HARDWARE_GPS'),
-('agent_los_02', 'LOS-RIDER-519 (Segun B.)', 'COURIER_BIKE', 'LAGOS', 6.4338000, 3.4281000, '88588636d7fffff', 31.40, 310, 4, 0, '["EXPRESS_BOX", "KYC_VERIFIED"]', 0.9690, 'AVAILABLE', 'HARDWARE_GPS'),
-('agent_los_03', 'LOS-RIDER-604 (Emeka N.)', 'COURIER_BIKE', 'LAGOS', 6.5789000, 3.3592000, '8858862343fffff', 33.10, 160, 4, 1, '["EXPRESS_BOX", "FRAGILE"]', 0.9850, 'AVAILABLE', 'HARDWARE_GPS'),
-('agent_los_04', 'LOS-RIDER-622 (Sadiq M.)', 'COURIER_BIKE', 'LAGOS', 6.5121000, 3.3761000, '88588621b7fffff', 26.90, 20, 4, 0, '["EXPRESS_BOX", "COLD_CHAIN"]', 0.9710, 'AVAILABLE', 'HARDWARE_GPS'),
-('agent_ekt_01', 'EKT-RIDER-701 (Femi D.)', 'COURIER_BIKE', 'ADO-EKITI', 7.6185000, 5.2194000, '8858809647fffff', 35.00, 65, 4, 0, '["EXPRESS_BOX", "KYC_TIER3"]', 0.9880, 'AVAILABLE', 'HARDWARE_GPS');
+('agent_abj_01', 'ABJ-RIDER-104 (demo)', 'COURIER_BIKE', 'ABUJA', 9.0761000, 7.4759000, '8858194ad3fffff', 34.20, 115, 4, 1, '["EXPRESS_BOX", "COLD_CHAIN", "KYC_VERIFIED"]', 0.9820, 'AVAILABLE', 'DEMO_SEED_POSITION'),
+('agent_abj_02', 'ABJ-RIDER-218 (demo)', 'COURIER_BIKE', 'ABUJA', 9.0815000, 7.4662000, '8858194ad3fffff', 29.80, 240, 4, 0, '["EXPRESS_BOX", "FRAGILE"]', 0.9640, 'AVAILABLE', 'DEMO_SEED_POSITION'),
+('agent_abj_03', 'ABJ-KYC-309 (demo)', 'KYC_FIELD_OFFICER', 'ABUJA', 9.0412000, 7.4981000, '8858194a97fffff', 24.50, 45, 6, 1, '["KYC_TIER3", "BIOMETRIC_POS", "EXPRESS_BOX"]', 0.9910, 'AVAILABLE', 'DEMO_SEED_POSITION'),
+('agent_abj_04', 'ABJ-VAN-412 (demo)', 'DISPATCH_VAN', 'ABUJA', 9.0685000, 7.4312000, '8858194f37fffff', 41.00, 90, 20, 3, '["BULK_CARGO", "EXPRESS_BOX", "FIELD_ENGINEER"]', 0.9530, 'AVAILABLE', 'DEMO_SEED_POSITION'),
+('agent_abj_05', 'ABJ-MED-911 (demo)', 'EMERGENCY_UNIT', 'ABUJA', 9.0844000, 7.4892000, '8858194ac3fffff', 52.40, 180, 2, 0, '["ALS_CERTIFIED", "TRAUMA_KIT", "EXPRESS_BOX"]', 0.9950, 'AVAILABLE', 'DEMO_SEED_POSITION'),
+('agent_los_01', 'LOS-RIDER-501 (demo)', 'COURIER_BIKE', 'LAGOS', 6.4451000, 3.4689000, '885886369bfffff', 27.60, 75, 4, 1, '["EXPRESS_BOX", "COLD_CHAIN", "LEKKI_PASS"]', 0.9780, 'AVAILABLE', 'DEMO_SEED_POSITION'),
+('agent_los_02', 'LOS-RIDER-519 (demo)', 'COURIER_BIKE', 'LAGOS', 6.4338000, 3.4281000, '88588636d7fffff', 31.40, 310, 4, 0, '["EXPRESS_BOX", "KYC_VERIFIED"]', 0.9690, 'AVAILABLE', 'DEMO_SEED_POSITION'),
+('agent_los_03', 'LOS-RIDER-604 (demo)', 'COURIER_BIKE', 'LAGOS', 6.5789000, 3.3592000, '8858862343fffff', 33.10, 160, 4, 1, '["EXPRESS_BOX", "FRAGILE"]', 0.9850, 'AVAILABLE', 'DEMO_SEED_POSITION'),
+('agent_los_04', 'LOS-RIDER-622 (demo)', 'COURIER_BIKE', 'LAGOS', 6.5121000, 3.3761000, '88588621b7fffff', 26.90, 20, 4, 0, '["EXPRESS_BOX", "COLD_CHAIN"]', 0.9710, 'AVAILABLE', 'DEMO_SEED_POSITION'),
+('agent_ekt_01', 'EKT-RIDER-701 (demo)', 'COURIER_BIKE', 'ADO-EKITI', 7.6185000, 5.2194000, '8858809647fffff', 35.00, 65, 4, 0, '["EXPRESS_BOX", "KYC_TIER3"]', 0.9880, 'AVAILABLE', 'DEMO_SEED_POSITION');

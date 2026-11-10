@@ -17,7 +17,10 @@ import {
   Workflow,
 } from 'lucide-react';
 
-type PublicPage = 'home' | 'docs' | 'start';
+type PublicPage = 'home' | 'docs' | 'start' | 'privacy';
+
+// Set this to a monitored mailbox before a public launch; the contact line is hidden while empty.
+const PRIVACY_CONTACT_EMAIL = process.env.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL || '';
 
 const navigation = [
   { href: '/', label: 'Overview' },
@@ -39,7 +42,7 @@ function Header({ current }: { current: PublicPage }) {
 }
 
 function Footer() {
-  return <footer className="public-footer"><div><strong>ResolveGrid</strong><span>Structured locations for better delivery decisions.</span></div><div><Link href="/docs">Documentation</Link><Link href="/start">Access guide</Link><Link href="/sign-in">Pilot sign in</Link></div></footer>;
+  return <footer className="public-footer"><div><strong>ResolveGrid</strong><span>Structured locations for better delivery decisions.</span></div><div><Link href="/docs">Documentation</Link><Link href="/start">Access guide</Link><Link href="/privacy">Privacy</Link><Link href="/sign-in">Pilot sign in</Link></div></footer>;
 }
 
 const flow = [
@@ -106,7 +109,26 @@ function Start() {
   </div>;
 }
 
+function Privacy() {
+  return <div className="public-page">
+    <Header current="privacy" />
+    <main className="docs-page legal-page">
+      <section className="docs-hero"><p className="public-kicker">Privacy notice</p><h1>What ResolveGrid collects, and why.</h1><p>ResolveGrid is a pilot-stage product. This notice describes the data the current system handles. It will be updated before any wider launch.</p></section>
+      <div className="legal-content">
+        <section><h2>Public demo</h2><p>You can use the public demo without an account. Address text you submit is processed to produce a result and a demo plan. Demo plans are visible to other demo visitors, so do not enter a private home address or anyone&rsquo;s personal details there.</p></section>
+        <section><h2>Pilot operators</h2><p>For an approved workspace we store your name, email address, role and a salted hash of your password. We never store the password itself. Signing in sets one essential session cookie that expires after eight hours. We do not use advertising or analytics cookies.</p></section>
+        <section><h2>Field agents</h2><p>Field agents have a provisioned account with a name and email address. The mobile app records device location only after the agent gives consent for that visit. A submitted observation holds the postcode, GPS position and accuracy, gate delay, walking distance and any access note the agent writes.</p></section>
+        <section><h2>How the data is used</h2><ul><li>To resolve addresses and plan dispatches for the workspace that asked.</li><li>To keep an append-only record of field evidence for review.</li><li>To limit abuse of the service, using the request&rsquo;s network address for a short period.</li></ul><p>Field evidence does not silently change trusted building records, and workspace plans are visible only to that workspace.</p></section>
+        <section><h2>Services we rely on</h2><p>To answer a request, ResolveGrid sends the address text or postcode to the national digital postcode service operated by NIPOST. It sends coordinates, without names or account details, to a road-routing service and a weather service. Where an AI explanation provider is configured, the address text may be sent to that provider to describe the result.</p></section>
+        <section><h2>Your choices</h2><p>You can ask to see, correct or delete the personal data held about you, or withdraw consent for location capture, in line with the Nigeria Data Protection Act 2023. Pilot data is kept for the length of the pilot unless you ask for it to be removed sooner.</p>{PRIVACY_CONTACT_EMAIL ? <p>Contact: <a href={`mailto:${PRIVACY_CONTACT_EMAIL}`}>{PRIVACY_CONTACT_EMAIL}</a></p> : <p>To make a request, contact the workspace owner or pilot coordinator who issued your access.</p>}</section>
+      </div>
+    </main>
+    <Footer />
+  </div>;
+}
+
 export default function PublicSite({ page }: { page: PublicPage }) {
+  if (page === 'privacy') return <Privacy />;
   if (page === 'docs') return <Docs />;
   if (page === 'start') return <Start />;
   return <Home />;

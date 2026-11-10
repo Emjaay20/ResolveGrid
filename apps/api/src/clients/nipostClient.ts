@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   AssembledPostcode,
   NipostLookupResult,
@@ -94,11 +95,12 @@ class NipostApiClient {
   private async callUpstreamNipost<T>(
     path: string,
     options: RequestInit = {},
-    overrideKey?: string
+    overrideKey?: string,
+    bypassSharedCircuit = false
   ): Promise<{ status: number; body: T | null }> {
     const keyStatus = this.getKeyStatus(overrideKey);
     const circuit = this.getCircuitState();
-    if (keyStatus === 'AWAITING_DASHBOARD_KEY' || circuit === 'OPEN') {
+    if (keyStatus === 'AWAITING_DASHBOARD_KEY' || (!bypassSharedCircuit && circuit === 'OPEN')) {
       return { status: 0, body: null };
     }
 
@@ -128,7 +130,7 @@ class NipostApiClient {
       }
 
       if (!response.ok) {
-        this.failureCount += 1;
+        if (!bypassSharedCircuit && response.status >= 500) this.failureCount += 1;
         this.upstreamFailures += 1;
         if (this.failureCount >= 5) {
           this.circuitOpenedAt = Date.now();
@@ -136,12 +138,12 @@ class NipostApiClient {
         return { status: response.status, body: null };
       }
 
-      this.failureCount = 0;
+      if (!bypassSharedCircuit) this.failureCount = 0;
       const payload = (await response.json()) as T;
       return { status: 200, body: payload };
     } catch {
       clearTimeout(timeout);
-      this.failureCount += 1;
+      if (!bypassSharedCircuit) this.failureCount += 1;
       this.upstreamFailures += 1;
       if (this.failureCount >= 5) {
         this.circuitOpenedAt = Date.now();
@@ -157,7 +159,8 @@ class NipostApiClient {
   public async lookupPostcode(
     rawCode: string,
     requestedLevel = 3,
-    overrideKey?: string
+    overrideKey?: string,
+    requireUpstreamGeometry = false
   ): Promise<NipostLookupResult | null> {
     const start = performance.now();
     this.totalRequests += 1;
@@ -167,8 +170,11 @@ class NipostApiClient {
       return null;
     }
 
-    const effectiveLevel = Math.min(requestedLevel, this.maxGrantedLevel);
-    const cacheKey = `nipost:lookup:${disassembled.compact}:L${effectiveLevel}`;
+    const effectiveLevel = overrideKey || requireUpstreamGeometry
+      ? requestedLevel
+      : Math.min(requestedLevel, this.maxGrantedLevel);
+    const credential = createHash('sha256').update(this.resolveActiveKey(overrideKey)).digest('hex');
+    const cacheKey = `nipost:lookup:v2:${credential}:${disassembled.compact}:L${effectiveLevel}:${requireUpstreamGeometry ? 'strict' : 'standard'}`;
     const cachedRaw = await store.cacheGet(cacheKey);
     if (cachedRaw) {
       this.cacheHits += 1;
@@ -203,16 +209,16 @@ class NipostApiClient {
     let upstream = await this.callUpstreamNipost<LookupPayload>(
       `/v1/lookup?code=${encodeURIComponent(disassembled.postcode)}&level=${effectiveLevel}`,
       { method: 'GET' },
-      overrideKey
+      overrideKey, requireUpstreamGeometry || Boolean(overrideKey)
     );
 
     // Automatic Level Negotiation: if key is capped at L1 (403 level_not_granted), retry with L1
     if (upstream.status === 403 && effectiveLevel > 1) {
-      this.maxGrantedLevel = 1;
+      if (!overrideKey && !requireUpstreamGeometry) this.maxGrantedLevel = 1;
       upstream = await this.callUpstreamNipost<LookupPayload>(
         `/v1/lookup?code=${encodeURIComponent(disassembled.postcode)}&level=1`,
         { method: 'GET' },
-        overrideKey
+        overrideKey, requireUpstreamGeometry || Boolean(overrideKey)
       );
     }
 
@@ -222,17 +228,23 @@ class NipostApiClient {
     // when the upstream explicitly validates the postcode.
     const isOfficialMatch = Boolean(
       upstream.body?.data &&
+      (!upstream.body.data.postcode || disassemblePostcode(upstream.body.data.postcode).compact === disassembled.compact) &&
         (upstream.body.data.valid || upstream.body.data.verified || upstream.body.data.status === 'valid')
     );
 
     if (isOfficialMatch && upstream.body?.data) {
       const d = upstream.body.data;
-      const coords = d.geometry?.coordinates
+      const geometry = d.geometry?.coordinates;
+      const [longitude, latitude] = Array.isArray(geometry) ? geometry : [];
+      const hasGeometry = typeof latitude === 'number' && Number.isFinite(latitude) && Math.abs(latitude) <= 90 &&
+        typeof longitude === 'number' && Number.isFinite(longitude) && Math.abs(longitude) <= 180;
+      if (requireUpstreamGeometry && !hasGeometry) return null;
+      const coords = hasGeometry
         ? {
-            latitude: d.geometry.coordinates[1],
-            longitude: d.geometry.coordinates[0],
-            h3_res8: latLngToHexCell(d.geometry.coordinates[1], d.geometry.coordinates[0], 8),
-            h3_res10: latLngToHexCell(d.geometry.coordinates[1], d.geometry.coordinates[0], 10),
+            latitude: latitude,
+            longitude: longitude,
+            h3_res8: latLngToHexCell(latitude, longitude, 8),
+            h3_res10: latLngToHexCell(latitude, longitude, 10),
           }
         : localRecord?.coordinates;
 
@@ -287,9 +299,11 @@ class NipostApiClient {
       };
 
       await store.cacheSet(cacheKey, JSON.stringify(enriched), 3600);
-      await store.upsertPostcodeRecord(enriched);
+      if (!overrideKey && !requireUpstreamGeometry) await store.upsertPostcodeRecord(enriched);
       return enriched;
     }
+
+    if (requireUpstreamGeometry) return null;
 
     if (localRecord) {
       const elapsed = Number((performance.now() - start).toFixed(2));
@@ -299,11 +313,45 @@ class NipostApiClient {
         cached: false,
         latency_ms: elapsed,
       };
-      await store.cacheSet(cacheKey, JSON.stringify(result), 3600);
       return result;
     }
 
     return null;
+  }
+
+  /** Checks the supplied device point against the nearest official building. */
+  public async verifyPickupPosition(code: string, lat: number, lng: number, overrideKey?: string): Promise<NipostLookupResult | null> {
+    const parsed = disassemblePostcode(code);
+    if (!parsed.valid) return null;
+    type ReversePayload = {
+      data?: {
+        found?: boolean;
+        unit?: {
+          postcode?: string; distance_m?: number; state_name?: string;
+          lga_name?: string; locality_name?: string; address?: string;
+        };
+      };
+    };
+    const start = performance.now();
+    const params = new URLSearchParams({ lat: String(lat), lng: String(lng), max_distance_m: '50' });
+    const upstream = await this.callUpstreamNipost<ReversePayload>(`/v1/search/reverse?${params}`, {}, overrideKey, true);
+    const unit = upstream.body?.data?.unit;
+    if (!upstream.body?.data?.found || !unit?.postcode || disassemblePostcode(unit.postcode).compact !== parsed.compact ||
+        typeof unit.distance_m !== 'number' || !Number.isFinite(unit.distance_m) || unit.distance_m < 0 || unit.distance_m > 50) return null;
+    return {
+      postcode: parsed.postcode, compact: parsed.compact, display: parsed.display, valid: true,
+      legacy_postal_code: parsed.legacyPostalCode,
+      administrative_address: {
+        state_code: parsed.segments.state, state_name: unit.state_name || parsed.stateName,
+        lga_code: parsed.segments.lga, lga_name: unit.lga_name || `LGA ${parsed.segments.lga}`,
+        district_code: parsed.segments.district, locality_name: unit.locality_name || `District ${parsed.segments.district}`,
+        zone: parsed.geopoliticalZone,
+      },
+      recent_house_address: { recent: unit.address || parsed.display },
+      coordinates: { latitude: lat, longitude: lng, h3_res8: latLngToHexCell(lat, lng, 8), h3_res10: latLngToHexCell(lat, lng, 10) },
+      source: this.getKeyStatus(overrideKey) === 'LIVE_PRODUCTION_KEY' ? 'NIPOST_API_LIVE' : 'NIPOST_API_SANDBOX',
+      cached: false, latency_ms: Number((performance.now() - start).toFixed(2)),
+    };
   }
 
   /**

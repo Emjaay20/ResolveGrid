@@ -5,7 +5,7 @@ dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
-import { store, TENANT_PROFILES } from './config/datastore';
+import { store, TENANT_PROFILES, INITIAL_AGENTS } from './config/datastore';
 import { nipostClient } from './clients/nipostClient';
 import { dispatchService } from './services/dispatchService';
 import { verificationService } from './services/verificationService';
@@ -17,8 +17,39 @@ import { taskLifecycleService } from './services/taskLifecycleService';
 
 export const app = express();
 app.set('trust proxy', 1);
-app.use(cors());
+app.disable('x-powered-by');
+
+// The web console reaches this API through a same-origin rewrite and the native
+// field app sends no Origin header, so neither needs CORS. Other browser origins
+// must be listed in CORS_ALLOWED_ORIGINS. Outside production an empty list stays
+// open so local web and Expo development keep working.
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      if (process.env.NODE_ENV !== 'production' && allowedOrigins.length === 0) return callback(null, true);
+      return callback(null, false);
+    },
+    credentials: true,
+  })
+);
+app.use((_req: Request, res: Response, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 app.use(express.json({ limit: '2mb' }));
+
+// Public demo surfaces only ever show the shared demo profiles and seed agents.
+// Workspace plans and provisioned field agents stay behind their own sign-in.
+const DEMO_AGENT_IDS = new Set(INITIAL_AGENTS.map((agent) => agent.id));
+const isDemoTenant = (tenantId: string): boolean => Object.prototype.hasOwnProperty.call(TENANT_PROFILES, tenantId);
 
 const writeRateWindows = new Map<string, { count: number; resetAt: number }>();
 
@@ -149,14 +180,50 @@ app.get('/v1/nipost/search/nearby', async (req: Request, res: Response) => {
 });
 
 app.get('/v1/nipost/lookup', async (req: Request, res: Response) => {
-  const code = String(req.query.code || 'FC-02-A09-DB-09');
+  const strict = req.query.strict === '1';
+  if (strict) {
+    res.set('Cache-Control', 'private, no-store');
+    const secret = process.env.RESOLVEGRID_SERVICE_TOKEN?.trim();
+    if (!secret) {
+      res.status(503).json({ error: 'Verified lookup is not configured.' });
+      return;
+    }
+    const expected = Buffer.from(secret);
+    const provided = Buffer.from(req.header('X-ResolveGrid-Service-Token') || '');
+    if (expected.length !== provided.length || !crypto.timingSafeEqual(expected, provided)) {
+      res.status(401).json({ error: 'A verified lookup service credential is required.' });
+      return;
+    }
+  }
+  const code = String(req.query.code || (strict ? '' : 'FC-02-A09-DB-09'));
   const level = Number(req.query.level || 3);
-  const result = await nipostClient.lookupPostcode(code, level, extractNipostKey(req));
-  if (!result) {
-    res.status(404).json({ error: 'Invalid or unknown NIPOST postcode format', code });
+  if (!code || !Number.isInteger(level) || level < 1 || level > 5) {
+    res.status(400).json({ error: 'A postcode and lookup level from 1 to 5 are required.' });
     return;
   }
-  res.json({ data: result });
+  const positionProvided = strict && (req.query.lat !== undefined || req.query.lng !== undefined);
+  const lat = typeof req.query.lat === 'string' && req.query.lat.trim() ? Number(req.query.lat) : NaN;
+  const lng = typeof req.query.lng === 'string' && req.query.lng.trim() ? Number(req.query.lng) : NaN;
+  if (positionProvided && (!Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lng) || Math.abs(lng) > 180)) {
+    res.status(400).json({ error: 'Valid pickup coordinates are required.' });
+    return;
+  }
+  try {
+    const result = positionProvided
+      ? await nipostClient.verifyPickupPosition(code, lat, lng, extractNipostKey(req))
+      : await nipostClient.lookupPostcode(code, level, extractNipostKey(req), strict);
+    if (!result) {
+      res.status(404).json({ error: positionProvided ? 'The device location does not match this postcode' : strict ? 'Upstream postcode geometry unavailable' : 'Invalid or unknown NIPOST postcode format', code });
+      return;
+    }
+    res.json({ data: result, ...(strict ? {
+      upstream_postcode_verified: true,
+      upstream_geometry_verified: !positionProvided,
+      coordinate_origin: positionProvided ? 'RESIDENT_DEVICE_REVERSE_MATCH' : 'NIPOST_GEOMETRY',
+    } : {}) });
+  } catch {
+    res.status(502).json({ error: 'Postcode lookup is temporarily unavailable.' });
+  }
 });
 
 app.post('/v1/nipost/assembly/assemble', async (req: Request, res: Response) => {
@@ -341,9 +408,14 @@ app.get('/v1/tenants', (_req: Request, res: Response) => {
 });
 
 app.get('/v1/agents', (_req: Request, res: Response) => {
+  const demoAgents = Array.from(store.agentMap.values()).filter((agent) => DEMO_AGENT_IDS.has(agent.id));
+  const demoCells = new Set(demoAgents.map((agent) => agent.h3_res8));
   res.json({
-    data: Array.from(store.agentMap.values()),
-    h3_velocity_cells: Object.fromEntries(store.h3VelocityMap.entries()),
+    data: demoAgents,
+    data_origin: 'DEMO_SEED',
+    h3_velocity_cells: Object.fromEntries(
+      Array.from(store.h3VelocityMap.entries()).filter(([cell]) => demoCells.has(cell))
+    ),
   });
 });
 
@@ -687,10 +759,17 @@ app.post('/v1/tasks/dispatch', async (req: Request, res: Response) => {
     req.body?.idempotency_key ||
     `idem_${crypto.randomUUID()}`;
   const { tenant_id, raw_address, postcode } = req.body || {};
+  // This public demo route may only plan against a shared demo profile. A pilot
+  // workspace's plans are created through its authenticated dispatch route.
+  const requestedTenant = tenant_id ? String(tenant_id) : 'tenant_logistics_ng';
+  if (!isDemoTenant(requestedTenant)) {
+    res.status(403).json({ error: 'Demo planning is limited to the shared demo profiles. Sign in to plan for a workspace.' });
+    return;
+  }
 
   const dispatched = await dispatchService.dispatchTask({
     idempotencyKey: String(idempotencyKey),
-    tenantId: tenant_id ? String(tenant_id) : 'tenant_logistics_ng',
+    tenantId: requestedTenant,
     rawAddress: raw_address ? String(raw_address) : undefined,
     postcode: postcode ? String(postcode) : undefined,
     overrideNipostKey: extractNipostKey(req),
@@ -745,9 +824,9 @@ app.post('/v1/telemetry/ping', async (req: Request, res: Response) => {
 });
 
 app.get('/v1/telemetry/live-accuracy', (_req: Request, res: Response) => {
-  const allTasks = Array.from(store.taskMap.values()).sort(
-    (a, b) => new Date(b.dispatched_at).getTime() - new Date(a.dispatched_at).getTime()
-  );
+  const allTasks = Array.from(store.taskMap.values())
+    .filter((task) => isDemoTenant(task.tenant_id))
+    .sort((a, b) => new Date(b.dispatched_at).getTime() - new Date(a.dispatched_at).getTime());
   const verifiedTasks = allTasks.filter(
     (t) => t.status === 'ARRIVED_VERIFIED' && t.residual_error_sec !== null
   );
@@ -777,7 +856,8 @@ app.get('/v1/telemetry/live-accuracy', (_req: Request, res: Response) => {
       online_river_updates_applied: verifiedTasks.filter((t) => t.online_model_updated).length,
     },
     nipost_gateway: nipostClient.getMetrics(),
-    tasks: allTasks,
+    scope: 'SHARED_DEMO_PROFILES',
+    tasks: allTasks.slice(0, 50).map(({ idempotency_key: _idempotencyKey, ...task }) => task),
   });
 });
 
@@ -826,7 +906,9 @@ app.post('/v1/kyc/verify-location', async (req: Request, res: Response) => {
   res.json(result);
 });
 
-app.get('/v1/kyc/verifications', (_req: Request, res: Response) => {
+app.get('/v1/kyc/verifications', (req: Request, res: Response) => {
+  // Verification records hold device coordinates and applicant references.
+  if (!requireFieldAdminAccess(req, res)) return;
   res.json({ data: store.kycList });
 });
 
@@ -916,17 +998,25 @@ app.post('/v1/evals/run', async (req: Request, res: Response) => {
       tool_calls: resolved.agent_trace.total_tool_calls,
       latency_ms: resolved.agent_trace.total_latency_ms,
       provider: resolved.agent_trace.provider_used,
+      source: resolved.primary_match.source,
     });
   }
+
+  const officialCases = results.filter((item) => item.source !== 'LOCAL_DEVELOPMENT_FIXTURE').length;
+  const totalToolCalls = results.reduce((sum, item) => sum + (Number(item.tool_calls) || 0), 0);
 
   res.json({
     summary: {
       total_cases: goldenCases.length,
       exact_building_matches: matches,
       accuracy_pct: Number(((matches / goldenCases.length) * 100).toFixed(1)),
-      naive_single_call_baseline_pct: 33.3,
-      standard_maps_centroid_baseline_pct: 16.7,
-      avg_tool_calls: 4.0,
+      official_source_cases: officialCases,
+      fixture_backed_cases: results.length - officialCases,
+      avg_tool_calls: Number((totalToolCalls / results.length).toFixed(1)),
+      note:
+        officialCases === results.length
+          ? 'Every case was answered from an official NIPOST source.'
+          : 'Cases answered from the local development fixture check the resolution pipeline only. They are not a measure of real-world accuracy.',
     },
     cases: results,
   });

@@ -579,7 +579,7 @@ export const INITIAL_POSTCODE_REGISTRY: NipostLookupResult[] = [
 export const INITIAL_AGENTS: AgentRecord[] = [
   {
     id: 'agent_abj_01',
-    callsign: 'ABJ-RIDER-104 (Musa I.)',
+    callsign: 'ABJ-RIDER-104 (demo)',
     agent_type: 'COURIER_BIKE',
     city: 'ABUJA',
     latitude: 9.0761,
@@ -592,12 +592,12 @@ export const INITIAL_AGENTS: AgentRecord[] = [
     skill_tags: ['EXPRESS_BOX', 'COLD_CHAIN', 'KYC_VERIFIED'],
     rolling_1h_on_time_rate: 0.982,
     status: 'AVAILABLE',
-    telemetry_source: 'HARDWARE_GPS',
+    telemetry_source: 'DEMO_SEED_POSITION',
     last_ping_at: new Date().toISOString(),
   },
   {
     id: 'agent_abj_02',
-    callsign: 'ABJ-RIDER-218 (Chinedu O.)',
+    callsign: 'ABJ-RIDER-218 (demo)',
     agent_type: 'COURIER_BIKE',
     city: 'ABUJA',
     latitude: 9.0815,
@@ -610,12 +610,12 @@ export const INITIAL_AGENTS: AgentRecord[] = [
     skill_tags: ['EXPRESS_BOX', 'FRAGILE'],
     rolling_1h_on_time_rate: 0.964,
     status: 'AVAILABLE',
-    telemetry_source: 'HARDWARE_GPS',
+    telemetry_source: 'DEMO_SEED_POSITION',
     last_ping_at: new Date().toISOString(),
   },
   {
     id: 'agent_abj_03',
-    callsign: 'ABJ-KYC-309 (Amina S.)',
+    callsign: 'ABJ-KYC-309 (demo)',
     agent_type: 'KYC_FIELD_OFFICER',
     city: 'ABUJA',
     latitude: 9.0412,
@@ -628,12 +628,12 @@ export const INITIAL_AGENTS: AgentRecord[] = [
     skill_tags: ['KYC_TIER3', 'BIOMETRIC_POS', 'EXPRESS_BOX'],
     rolling_1h_on_time_rate: 0.991,
     status: 'AVAILABLE',
-    telemetry_source: 'HARDWARE_GPS',
+    telemetry_source: 'DEMO_SEED_POSITION',
     last_ping_at: new Date().toISOString(),
   },
   {
     id: 'agent_abj_04',
-    callsign: 'ABJ-VAN-412 (Ibrahim K.)',
+    callsign: 'ABJ-VAN-412 (demo)',
     agent_type: 'DISPATCH_VAN',
     city: 'ABUJA',
     latitude: 9.0685,
@@ -646,12 +646,12 @@ export const INITIAL_AGENTS: AgentRecord[] = [
     skill_tags: ['BULK_CARGO', 'EXPRESS_BOX', 'FIELD_ENGINEER'],
     rolling_1h_on_time_rate: 0.953,
     status: 'AVAILABLE',
-    telemetry_source: 'HARDWARE_GPS',
+    telemetry_source: 'DEMO_SEED_POSITION',
     last_ping_at: new Date().toISOString(),
   },
   {
     id: 'agent_abj_05',
-    callsign: 'ABJ-MED-911 (FCT Rapid Unit 2)',
+    callsign: 'ABJ-MED-911 (demo)',
     agent_type: 'EMERGENCY_UNIT',
     city: 'ABUJA',
     latitude: 9.0844,
@@ -664,12 +664,12 @@ export const INITIAL_AGENTS: AgentRecord[] = [
     skill_tags: ['ALS_CERTIFIED', 'TRAUMA_KIT', 'EXPRESS_BOX'],
     rolling_1h_on_time_rate: 0.995,
     status: 'AVAILABLE',
-    telemetry_source: 'HARDWARE_GPS',
+    telemetry_source: 'DEMO_SEED_POSITION',
     last_ping_at: new Date().toISOString(),
   },
   {
     id: 'agent_los_01',
-    callsign: 'LOS-RIDER-501 (Tunde A.)',
+    callsign: 'LOS-RIDER-501 (demo)',
     agent_type: 'COURIER_BIKE',
     city: 'LAGOS',
     latitude: 6.4451,
@@ -682,12 +682,12 @@ export const INITIAL_AGENTS: AgentRecord[] = [
     skill_tags: ['EXPRESS_BOX', 'COLD_CHAIN', 'LEKKI_PASS'],
     rolling_1h_on_time_rate: 0.978,
     status: 'AVAILABLE',
-    telemetry_source: 'HARDWARE_GPS',
+    telemetry_source: 'DEMO_SEED_POSITION',
     last_ping_at: new Date().toISOString(),
   },
   {
     id: 'agent_los_02',
-    callsign: 'LOS-RIDER-519 (Segun B.)',
+    callsign: 'LOS-RIDER-519 (demo)',
     agent_type: 'COURIER_BIKE',
     city: 'LAGOS',
     latitude: 6.4338,
@@ -700,12 +700,12 @@ export const INITIAL_AGENTS: AgentRecord[] = [
     skill_tags: ['EXPRESS_BOX', 'KYC_VERIFIED'],
     rolling_1h_on_time_rate: 0.969,
     status: 'AVAILABLE',
-    telemetry_source: 'HARDWARE_GPS',
+    telemetry_source: 'DEMO_SEED_POSITION',
     last_ping_at: new Date().toISOString(),
   },
   {
     id: 'agent_los_03',
-    callsign: 'LOS-RIDER-604 (Emeka N.)',
+    callsign: 'LOS-RIDER-604 (demo)',
     agent_type: 'COURIER_BIKE',
     city: 'LAGOS',
     latitude: 6.5789,
@@ -718,12 +718,12 @@ export const INITIAL_AGENTS: AgentRecord[] = [
     skill_tags: ['EXPRESS_BOX', 'FRAGILE'],
     rolling_1h_on_time_rate: 0.985,
     status: 'AVAILABLE',
-    telemetry_source: 'HARDWARE_GPS',
+    telemetry_source: 'DEMO_SEED_POSITION',
     last_ping_at: new Date().toISOString(),
   },
   {
     id: 'agent_los_04',
-    callsign: 'LOS-RIDER-622 (Sadiq M.)',
+    callsign: 'LOS-RIDER-622 (demo)',
     agent_type: 'COURIER_BIKE',
     city: 'LAGOS',
     latitude: 6.5121,
@@ -736,12 +736,12 @@ export const INITIAL_AGENTS: AgentRecord[] = [
     skill_tags: ['EXPRESS_BOX', 'COLD_CHAIN'],
     rolling_1h_on_time_rate: 0.971,
     status: 'AVAILABLE',
-    telemetry_source: 'HARDWARE_GPS',
+    telemetry_source: 'DEMO_SEED_POSITION',
     last_ping_at: new Date().toISOString(),
   },
   {
     id: 'agent_ekt_01',
-    callsign: 'EKT-RIDER-701 (Femi D.)',
+    callsign: 'EKT-RIDER-701 (demo)',
     agent_type: 'COURIER_BIKE',
     city: 'ADO-EKITI',
     latitude: 7.6185,
@@ -754,7 +754,7 @@ export const INITIAL_AGENTS: AgentRecord[] = [
     skill_tags: ['EXPRESS_BOX', 'KYC_TIER3'],
     rolling_1h_on_time_rate: 0.988,
     status: 'AVAILABLE',
-    telemetry_source: 'HARDWARE_GPS',
+    telemetry_source: 'DEMO_SEED_POSITION',
     last_ping_at: new Date().toISOString(),
   },
 ];
@@ -762,7 +762,7 @@ export const INITIAL_AGENTS: AgentRecord[] = [
 export const TENANT_PROFILES: Record<string, TenantProfile> = {
   tenant_logistics_ng: {
     id: 'tenant_logistics_ng',
-    name: 'Partner Delivery Network',
+    name: 'Delivery Network (demo profile)',
     industry_vertical: 'LOGISTICS',
     max_search_radius_m: 8000,
     required_lookup_level: 3,
@@ -771,7 +771,7 @@ export const TENANT_PROFILES: Record<string, TenantProfile> = {
   },
   tenant_fintech_kyc: {
     id: 'tenant_fintech_kyc',
-    name: 'Moniepoint / Tier-3 Merchant KYC',
+    name: 'Merchant KYC Verification (demo profile)',
     industry_vertical: 'BANKING_KYC',
     max_search_radius_m: 5000,
     required_lookup_level: 3,
@@ -780,7 +780,7 @@ export const TENANT_PROFILES: Record<string, TenantProfile> = {
   },
   tenant_emergency_fct: {
     id: 'tenant_emergency_fct',
-    name: 'FCT NEMA / Rapid Medical Dispatch',
+    name: 'Emergency Medical Dispatch (demo profile)',
     industry_vertical: 'EMERGENCY_RESPONSE',
     max_search_radius_m: 15000,
     required_lookup_level: 3,
@@ -789,7 +789,7 @@ export const TENANT_PROFILES: Record<string, TenantProfile> = {
   },
   tenant_field_infra: {
     id: 'tenant_field_infra',
-    name: 'IHS Towers / Fiber Grid Maintenance',
+    name: 'Field Infrastructure Maintenance (demo profile)',
     industry_vertical: 'FIELD_OPS',
     max_search_radius_m: 20000,
     required_lookup_level: 3,
@@ -823,6 +823,11 @@ class DataStore {
       // never be presented to a user as an official NIPOST lookup.
       this.postcodeMap.set(item.postcode, {
         ...item,
+        // A fixture has no verified arrivals and no earned trust score; both only
+        // grow from consented field evidence.
+        building_telemetry: item.building_telemetry
+          ? { ...item.building_telemetry, verified_arrival_count: 0, kyc_trust_score: 0 }
+          : undefined,
         source: 'LOCAL_DEVELOPMENT_FIXTURE',
       });
     }

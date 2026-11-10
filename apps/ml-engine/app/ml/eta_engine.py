@@ -22,9 +22,10 @@ FEATURE_NAMES = [
 
 class HybridChampionChallengerEngine:
     """
-    Hybrid Production ETA Engine:
-      1. Champion Model: Vectorized Scikit-Learn GradientBoostingRegressor trained on
-         3,500 Nigerian metropolitan last-mile spatial delivery samples.
+    Hybrid ETA Engine (prototype):
+      1. Baseline Model: Scikit-Learn GradientBoostingRegressor fitted on 3,500
+         SYNTHETIC, simulated last-mile samples (see train_champion.py). It has not
+         been validated on real arrivals.
       2. Challenger Model: Streaming SGDRegressor (partial_fit) with adaptive learning
          rate and per-postcode exponential moving average (EMA) residual bias memory.
     """
@@ -239,8 +240,18 @@ class HybridChampionChallengerEngine:
             else self.val_mae
         )
         return {
-            "champion_model": f"GradientBoostingRegressor (R² = {self.val_r2:.3f}, MAE = {self.val_mae:.1f}s)",
-            "challenger_model": "Streaming SGDRegressor (adaptive partial_fit) + Postcode Memory",
+            # The baseline was fitted on simulated trips only. Its fit statistics describe
+            # the simulator, not real deliveries, so they are reported separately and
+            # never as a headline accuracy claim.
+            "champion_model": "Synthetic-data ETA baseline (gradient boosting; not validated on real arrivals)",
+            "champion_training_data": "SYNTHETIC_SIMULATION",
+            "validated_on_real_arrivals": False,
+            "synthetic_fit": {
+                "r2": round(float(self.val_r2), 3),
+                "mae_sec": round(float(self.val_mae), 1),
+                "note": "Measured against simulated trips; not evidence of real-world accuracy.",
+            },
+            "challenger_model": "Online residual learner (SGD partial_fit + per-postcode memory)",
             "online_samples_learned": self.online_samples_learned,
             "rolling_mae_sec": round(mae, 2),
             "feature_importances": self.feature_importances,
