@@ -179,6 +179,24 @@ app.get('/v1/nipost/search/nearby', async (req: Request, res: Response) => {
   res.json({ data: result });
 });
 
+app.post('/v1/nipost/structure', async (req: Request, res: Response) => {
+  const secret = process.env.RESOLVEGRID_SERVICE_TOKEN?.trim();
+  if (!secret) { res.status(503).json({ error: 'Verified lookup is not configured.' }); return; }
+  const expected = Buffer.from(secret);
+  const provided = Buffer.from(req.header('X-ResolveGrid-Service-Token') || '');
+  if (expected.length !== provided.length || !crypto.timingSafeEqual(expected, provided)) {
+    res.status(401).json({ error: 'A service credential is required.' }); return;
+  }
+  if (typeof req.body?.code !== 'string' || req.body.code.length > 32) {
+    res.status(400).json({ error: 'Enter a postcode.' }); return;
+  }
+  try {
+    const result = await nipostClient.verifyStructure(req.body.code, extractNipostKey(req));
+    if (!result) { res.status(422).json({ error: 'Postcode structure could not be verified with NIPOST.' }); return; }
+    res.json({ data: result });
+  } catch { res.status(502).json({ error: 'NIPOST structure verification is unavailable.' }); }
+});
+
 app.get('/v1/nipost/lookup', async (req: Request, res: Response) => {
   const strict = req.query.strict === '1';
   if (strict) {

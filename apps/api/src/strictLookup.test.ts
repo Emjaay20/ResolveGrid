@@ -14,6 +14,14 @@ test('strict postcode lookup requires upstream geometry, service authentication 
       return;
     }
     response.setHeader('Content-Type', 'application/json');
+    if (url.pathname === '/v1/assembly/disassemble') {
+      response.end(JSON.stringify({ data: { state: 'FC', lga: '01', district: 'A01', area: 'KP', unit: '27' } })); return;
+    }
+    if (url.pathname.startsWith('/v1/reference/')) {
+      const list = url.pathname.split('/').pop()!;
+      const code = ({ states: 'FC', lgas: '01', districts: 'A01', areas: 'KP' } as Record<string, string>)[list];
+      response.end(JSON.stringify({ data: { [list]: [{ code, name: code }] } })); return;
+    }
     if (url.pathname === '/v1/search/reverse') {
       assert.equal(url.searchParams.get('max_distance_m'), '50');
       response.end(JSON.stringify({ data: {
@@ -65,6 +73,17 @@ test('strict postcode lookup requires upstream geometry, service authentication 
   assert.equal(matched.coordinate_origin, 'RESIDENT_DEVICE_REVERSE_MATCH');
   assert.equal((await fetch(url + '&lat=9.08&lng=7.47018', { headers: trusted })).status, 404);
   assert.equal((await fetch(url + '&lat=91&lng=7.47018', { headers: trusted })).status, 400);
+
+  const structureUrl = url.split('/v1/')[0] + '/v1/nipost/structure';
+  const structure = await fetch(structureUrl, { method: 'POST', headers: { ...trusted, 'Content-Type': 'application/json' }, body: JSON.stringify({ code: 'FC01A01KP27' }) });
+  assert.equal(structure.status, 200);
+  const structureData = (await structure.json()).data;
+  assert.equal(structureData.source, 'NIPOST_STRUCTURE_VERIFIED');
+  assert.equal(structureData.building_verified, false);
+  assert.equal(structureData.coordinates, undefined);
+  assert.equal(structureData.checks.length, 5);
+  assert.equal((await fetch(structureUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: 'FC01A01KP27' }) })).status, 401);
+  assert.equal((await fetch(structureUrl, { method: 'POST', headers: { ...trusted, 'Content-Type': 'application/json' }, body: JSON.stringify({ code: 'FC01A01XX27' }) })).status, 422);
 
   for (const key of ['nipost_test_no_geometry', 'nipost_test_wrong_code', 'nipost_test_invalid']) {
     const denied = await fetch(url, { headers: { ...trusted, 'X-Nipost-Key': key } });

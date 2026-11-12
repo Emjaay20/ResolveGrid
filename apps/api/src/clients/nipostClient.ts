@@ -619,6 +619,39 @@ class NipostApiClient {
     return localDisassembled;
   }
 
+  /** Verifies syntax and administrative membership, without asserting that the building exists. */
+  public async verifyStructure(rawCode: string, overrideKey?: string) {
+    const compact = rawCode.toUpperCase().replace(/[ -]/g, '');
+    if (!/^[A-Z]{2}\d{2}[A-Z]\d{2}[A-Z]{2}\d{2}$/.test(compact)) return null;
+    const segments: NipostSegments = { state: compact.slice(0, 2), lga: compact.slice(2, 4),
+      district: compact.slice(4, 7), area: compact.slice(7, 9), unit: compact.slice(9, 11) };
+    const postcode = Object.values(segments).join('-');
+    const disassembly = await this.callUpstreamNipost<{ data?: NipostSegments }>(
+      `/v1/assembly/disassemble?code=${encodeURIComponent(compact)}`, {}, overrideKey, true
+    );
+    if (disassembly.status !== 200 || !disassembly.body?.data ||
+        Object.entries(segments).some(([key, value]) => disassembly.body!.data![key as keyof NipostSegments] !== value)) return null;
+    const params = new URLSearchParams({ state: segments.state, lga: segments.lga, district: segments.district });
+    const paths = ['/v1/reference/states', `/v1/reference/lgas?state=${segments.state}`,
+      `/v1/reference/districts?state=${segments.state}&lga=${segments.lga}`, `/v1/reference/areas?${params}`];
+    const responses = await Promise.all(paths.map((path) =>
+      this.callUpstreamNipost<{ data?: Record<string, Array<{ code: string; name?: string }>> }>(path, {}, overrideKey, true)));
+    const lists = ['states', 'lgas', 'districts', 'areas'] as const;
+    const codes = [segments.state, segments.lga, segments.district, segments.area];
+    const matches = responses.map((response, index) => response.status === 200 &&
+      Array.isArray(response.body?.data?.[lists[index]])
+      ? response.body!.data![lists[index]].find((item) => item.code === codes[index]) : undefined);
+    if (matches.some((match) => !match)) return null;
+    return {
+      postcode, district: `${segments.state}-${segments.lga}-${segments.district}`, segments,
+      source: 'NIPOST_STRUCTURE_VERIFIED' as const, building_verified: false,
+      state: matches[0]!.name || segments.state, lga: matches[1]!.name || segments.lga,
+      area: matches[3]!.name || segments.area,
+      checked_at: new Date().toISOString(),
+      checks: ['/v1/assembly/disassemble', ...paths],
+    };
+  }
+
   /**
    * 7. GET /v1/reference/* (States, LGAs, Districts, Areas Catalog)
    * Queries NIPOST's official free precomputed administrative catalog
