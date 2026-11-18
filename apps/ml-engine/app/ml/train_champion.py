@@ -17,6 +17,18 @@ FEATURE_NAMES = [
 ]
 
 
+def deterministic_eta(X: np.ndarray) -> np.ndarray:
+    """The pre-ML dispatch baseline. Also used as the explicit benchmark."""
+    road, gate, walk, rain, wind, velocity, reliability, load = X.T
+    walk_sec = walk / 1.30
+    weather_penalty = rain * 18.0 + np.where(wind > 24.0, 20.0, 0.0)
+    congestion = 1.0 + np.maximum(0.0, (30.0 - velocity) / 80.0)
+    rider_reliability = 1.0 + np.maximum(0.0, (0.97 - reliability) * 1.3)
+    load_penalty = load * 14.0
+    return (road * congestion + gate + walk_sec + weather_penalty + load_penalty) * rider_reliability
+
+
+
 def generate_synthetic_nigerian_telemetry(n_samples: int = 3500, seed: int = 42):
     """
     Generates realistic last-mile delivery telemetry across Nigerian metropolitan areas
