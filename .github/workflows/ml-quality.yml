@@ -1,0 +1,49 @@
+name: ML quality and gateway build
+
+on:
+  push:
+    branches: [improve/ml-eta-security-evaluation-20261118]
+  pull_request:
+    paths:
+      - "apps/ml-engine/**"
+      - "apps/api/**"
+      - "packages/shared/**"
+      - "docker-compose.yml"
+      - ".github/workflows/ml-quality.yml"
+
+jobs:
+  ml-python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/ml-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/ml-engine/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run ML reliability tests
+        run: python -m unittest discover -s . -p 'test_ml*.py' -v
+      - name: Run honest synthetic benchmark
+        run: python evaluate_eta.py
+
+  gateway-typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+      - name: Install Node workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build shared and API packages
+        run: pnpm --filter @resolvegrid/shared build && pnpm --filter @resolvegrid/api build
+      - name: Run Node gateway tests
+        run: pnpm test
