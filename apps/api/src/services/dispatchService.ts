@@ -351,7 +351,7 @@ export class DispatchService {
     try {
       const mlRes = await fetch(`${this.mlEngineUrl}/v1/ml/dispatch-eta`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-ML-Service-Token': process.env.ML_SERVICE_TOKEN || '' },
         body: JSON.stringify({
           tenant_id: tenant.id,
           ml_profile: tenant.ml_profile,
