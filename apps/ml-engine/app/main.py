@@ -46,11 +46,11 @@ class OnlineLearnRequest(BaseModel):
     road_distance_m: int = Field(ge=0, le=1000000)
     osrm_base_duration_sec: int = Field(gt=0, le=86400)
     gate_delay_sec: int = Field(ge=0, le=7200)
-    compound_walk_meters: float = Field(default=25, ge=0, le=5000)
-    rain_mm: float = Field(default=0, ge=0, le=500)
-    wind_speed_kmh: float = Field(default=10, ge=0, le=250)
-    velocity_kmh: float = Field(default=30, ge=0, le=200)
-    rolling_1h_on_time_rate: float = Field(default=0.96, ge=0, le=1)
+    compound_walk_meters: float = Field(default=25, ge=0, le=5000, allow_inf_nan=False)
+    rain_mm: float = Field(default=0, ge=0, le=500, allow_inf_nan=False)
+    wind_speed_kmh: float = Field(default=10, ge=0, le=250, allow_inf_nan=False)
+    velocity_kmh: float = Field(default=30, ge=0, le=200, allow_inf_nan=False)
+    rolling_1h_on_time_rate: float = Field(default=0.96, ge=0, le=1, allow_inf_nan=False)
     active_load: int = Field(default=0, ge=0, le=100)
     predicted_eta_sec: int = Field(gt=0, le=86400)
     actual_duration_sec: int = Field(gt=0, le=86400)
@@ -94,11 +94,14 @@ async def dispatch_eta(
     x_ml_service_token: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     require_ml_service_token(x_ml_service_token)
-    return eta_engine.score_candidates(
-        postcode=body.postcode,
-        candidates=body.candidates,
-        ml_profile=body.ml_profile,
-    )
+    try:
+        return eta_engine.score_candidates(
+            postcode=body.postcode,
+            candidates=body.candidates,
+            ml_profile=body.ml_profile,
+        )
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid numeric ETA features") from exc
 
 
 @app.post("/v1/ml/learn")
@@ -107,4 +110,7 @@ async def ml_learn(
     x_ml_service_token: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     require_ml_service_token(x_ml_service_token)
-    return eta_engine.learn_one(body.model_dump())
+    try:
+        return eta_engine.learn_one(body.model_dump())
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid learning observation") from exc
