@@ -39,6 +39,8 @@ class HybridChampionChallengerEngine:
         self._lock = threading.RLock()
         self._state_path = Path(os.environ['ML_STATE_PATH']) if os.getenv('ML_STATE_PATH') else None
         self._saved_state = False
+        # Unvalidated synthetic models must not drive real-world dispatch by default.
+        self._experimental_eta_enabled = os.getenv("ML_ENABLE_EXPERIMENTAL_ETA", "false").lower() in {"1", "true", "yes"}
         self._seen_task_ids: set[str] = set()
         self.online_samples_learned: int = 0
         self.learning_rate: float = 0.08
@@ -170,7 +172,7 @@ class HybridChampionChallengerEngine:
             raise ValueError("ETA features must be finite numeric values")
 
         # 1. Champion Model Predictions (GBDT Regressor)
-        if self.champion_model is not None:
+        if self._experimental_eta_enabled and self.champion_model is not None:
             champion_preds = self.champion_model.predict(X)
         else:
             champion_preds = deterministic_eta(X)
@@ -182,7 +184,10 @@ class HybridChampionChallengerEngine:
             challenger_preds = champion_preds + postcode_adj
 
         profile_mult = 0.88 if ml_profile == "emergency_intercept_v1" else 1.0
-        challenger_blend = min(0.45, 0.20 + self.online_samples_learned * 0.008)
+        challenger_blend = (
+            min(0.45, 0.20 + self.online_samples_learned * 0.008)
+            if self._experimental_eta_enabled else 0.0
+        )
 
         for i, c in enumerate(candidates):
             c_eta = max(45, int(round(float(champion_preds[i]) * profile_mult)))
@@ -217,6 +222,7 @@ class HybridChampionChallengerEngine:
         return {
             "postcode": postcode,
             "ml_profile": ml_profile,
+            "prediction_mode": "EXPERIMENTAL_SYNTHETIC_ML" if self._experimental_eta_enabled else "DETERMINISTIC_BASELINE",
             "inference_latency_ms": elapsed_ms,
             "online_samples_learned": self.online_samples_learned,
             "postcode_learned_bias_sec": round(postcode_adj, 2),
@@ -275,6 +281,8 @@ class HybridChampionChallengerEngine:
             "champion_model": "Synthetic-data ETA baseline (scikit-learn gradient boosting)",
             "champion_training_data": "SYNTHETIC_SIMULATION",
             "validated_on_real_arrivals": False,
+            "experimental_eta_enabled": self._experimental_eta_enabled,
+            "active_eta_strategy": "EXPERIMENTAL_SYNTHETIC_ML" if self._experimental_eta_enabled else "DETERMINISTIC_BASELINE",
             "synthetic_fit": {
                 "r2": round(float(self.val_r2), 3),
                 "mae_sec": round(float(self.val_mae), 1),
