@@ -12,7 +12,7 @@
     "dev:api": "pnpm --filter @resolvegrid/api dev",
     "dev:web": "pnpm --filter @resolvegrid/web dev",
     "dev:mobile": "pnpm --filter @resolvegrid/mobile start",
-    "dev:ml": "cd apps/ml-engine && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:ml": "cd apps/ml-engine && python -m app.ml.train_champion && uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
     "test": "pnpm --filter @resolvegrid/shared test && pnpm --filter @resolvegrid/api test",
     "docker:up": "docker compose up --build -d",
     "docker:down": "docker compose down"
