@@ -71,6 +71,13 @@ test('dispatchService resolves messy Nigerian landmarks and dispatches with idem
   assert.ok(verified);
   assert.equal(verified.task.status, 'ARRIVED_VERIFIED');
   assert.equal(verified.task.residual_error_sec, 9);
+  const recordedArrival = verified.task.actual_arrival_at;
+  const verifyReplay = await verificationService.verifyTaskArrivalAndLearn({
+    taskId: d1.task.id, actualDurationSec: 9999,
+  });
+  assert.ok(verifyReplay);
+  assert.equal(verifyReplay.task.actual_duration_sec, verified.task.actual_duration_sec);
+  assert.equal(verifyReplay.task.actual_arrival_at, recordedArrival);
 });
 
 test('provisioned field identities pass the field-agent check before source validation', async () => {
