@@ -1,10 +1,11 @@
 import os
+import secrets
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 
@@ -35,19 +36,33 @@ class ResolveRequest(BaseModel):
 class DispatchEtaRequest(BaseModel):
     tenant_id: str = "tenant_logistics_ng"
     ml_profile: str = "logistics_eta_v1"
-    postcode: str
-    candidates: List[Dict[str, Any]]
+    postcode: str = Field(min_length=3, max_length=64)
+    candidates: List[Dict[str, Any]] = Field(min_length=1, max_length=100)
 
 
 class OnlineLearnRequest(BaseModel):
-    task_id: str
-    postcode: str
-    road_distance_m: int
-    osrm_base_duration_sec: int
-    gate_delay_sec: int
-    rain_mm: float = 0.0
-    predicted_eta_sec: int
-    actual_duration_sec: int
+    task_id: str = Field(min_length=1, max_length=128)
+    postcode: str = Field(min_length=3, max_length=64)
+    road_distance_m: int = Field(ge=0, le=1000000)
+    osrm_base_duration_sec: int = Field(gt=0, le=86400)
+    gate_delay_sec: int = Field(ge=0, le=7200)
+    compound_walk_meters: float = Field(default=25, ge=0, le=5000)
+    rain_mm: float = Field(default=0, ge=0, le=500)
+    wind_speed_kmh: float = Field(default=10, ge=0, le=250)
+    velocity_kmh: float = Field(default=30, ge=0, le=200)
+    rolling_1h_on_time_rate: float = Field(default=0.96, ge=0, le=1)
+    active_load: int = Field(default=0, ge=0, le=100)
+    predicted_eta_sec: int = Field(gt=0, le=86400)
+    actual_duration_sec: int = Field(gt=0, le=86400)
+
+
+def require_ml_service_token(token: Optional[str]) -> None:
+    """Fail closed for the internal inference and learning endpoints."""
+    expected = os.getenv("ML_SERVICE_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="ML service authentication is not configured")
+    if not token or not secrets.compare_digest(token, expected):
+        raise HTTPException(status_code=401, detail="Invalid ML service credential")
 
 
 @app.get("/v1/health")
@@ -74,7 +89,11 @@ async def agent_resolve(
 
 
 @app.post("/v1/ml/dispatch-eta")
-async def dispatch_eta(body: DispatchEtaRequest) -> Dict[str, Any]:
+async def dispatch_eta(
+    body: DispatchEtaRequest,
+    x_ml_service_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_ml_service_token(x_ml_service_token)
     return eta_engine.score_candidates(
         postcode=body.postcode,
         candidates=body.candidates,
@@ -83,5 +102,9 @@ async def dispatch_eta(body: DispatchEtaRequest) -> Dict[str, Any]:
 
 
 @app.post("/v1/ml/learn")
-async def ml_learn(body: OnlineLearnRequest) -> Dict[str, Any]:
+async def ml_learn(
+    body: OnlineLearnRequest,
+    x_ml_service_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_ml_service_token(x_ml_service_token)
     return eta_engine.learn_one(body.model_dump())
