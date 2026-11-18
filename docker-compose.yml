@@ -47,8 +47,7 @@ services:
       API_BASE_URL: http://api:4000
       ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:?Set ML_SERVICE_TOKEN in .env}
       ML_STATE_PATH: /var/lib/resolvegrid-ml/online_state.joblib
-    ports:
-      # Internal ML service: never publish the learning endpoint on the host.
+    # Internal ML service: never publish the learning endpoint on the host.
     volumes:
       - ml_online_state:/var/lib/resolvegrid-ml
     depends_on:
