@@ -9,7 +9,7 @@ import joblib
 import numpy as np
 from sklearn.linear_model import SGDRegressor
 from sklearn.preprocessing import StandardScaler
-from .train_champion import generate_synthetic_nigerian_telemetry
+from .train_champion import deterministic_eta, generate_synthetic_nigerian_telemetry
 
 MODEL_PATH = Path(__file__).resolve().parent / "champion_model.joblib"
 
@@ -173,15 +173,7 @@ class HybridChampionChallengerEngine:
         if self.champion_model is not None:
             champion_preds = self.champion_model.predict(X)
         else:
-            # Deterministic analytical fallback
-            osrm = X[:, 0]
-            gate = X[:, 1]
-            walk_sec = X[:, 2] / 1.30
-            rain_pen = X[:, 3] * 18.0 + np.where(X[:, 4] > 24.0, 20.0, 0.0)
-            congestion = 1.0 + np.maximum(0.0, (30.0 - X[:, 5]) / 80.0)
-            reliability = 1.0 + np.maximum(0.0, (0.97 - X[:, 6]) * 1.3)
-            load = X[:, 7] * 14.0
-            champion_preds = (osrm * congestion + gate + walk_sec + rain_pen + load) * reliability
+            champion_preds = deterministic_eta(X)
 
         # 2. Challenger Model Predictions (Online Streaming SGD + Postcode Memory)
         try:
