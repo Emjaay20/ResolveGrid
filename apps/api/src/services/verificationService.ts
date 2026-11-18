@@ -28,6 +28,10 @@ export class VerificationService {
   } | null> {
     const task = store.taskMap.get(params.taskId);
     if (!task) return null;
+    // Replayed arrival evidence must not train the online model twice.
+    if (task.status === 'ARRIVED_VERIFIED') {
+      return { task, online_learning_response: { updated: false, reason: 'already_verified' } };
+    }
 
     const now = new Date();
     const elapsedSinceDispatchSec = Math.max(
@@ -65,22 +69,27 @@ export class VerificationService {
 
     // Trigger the FastAPI online residual learner (POST /v1/ml/learn)
     let onlineLearnResult: Record<string, unknown> = {
-      updated: true,
-      mode: 'local_online_mirror',
+      updated: false,
+      mode: 'model_service_unavailable',
     };
+    const assignedAgent = store.agentMap.get(task.assigned_agent_id);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2000);
     try {
       const res = await fetch(`${this.mlEngineUrl}/v1/ml/learn`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-ML-Service-Token': process.env.ML_SERVICE_TOKEN || '' },
         body: JSON.stringify({
           task_id: task.id,
           postcode: task.resolved_postcode,
           road_distance_m: task.road_distance_m,
           osrm_base_duration_sec: task.osrm_base_duration_sec,
           gate_delay_sec: params.measuredGateDelaySec ?? task.gate_delay_sec,
+          compound_walk_meters: postcodeEntry?.building_telemetry?.compound_walk_meters ?? 25,
+          velocity_kmh: assignedAgent?.velocity_kmh ?? 30,
+          rolling_1h_on_time_rate: assignedAgent?.rolling_1h_on_time_rate ?? 0.96,
+          active_load: assignedAgent?.active_load ?? 0,
           rain_mm: task.weather_rain_mm,
           predicted_eta_sec: task.predicted_eta_sec,
           actual_duration_sec: actualDuration,
@@ -95,14 +104,14 @@ export class VerificationService {
       clearTimeout(timer);
     }
 
-    task.online_model_updated = true;
+    task.online_model_updated = onlineLearnResult.updated === true;
     store.taskMap.set(task.id, task);
 
     if (store.mysqlPool && store.mysqlConnected) {
       try {
         await store.mysqlPool.execute(
-          `UPDATE dispatch_tasks SET status = 'ARRIVED_VERIFIED', actual_arrival_at = NOW(), actual_duration_sec = ?, residual_error_sec = ?, online_model_updated = TRUE WHERE id = ?`,
-          [actualDuration, residualError, task.id]
+          `UPDATE dispatch_tasks SET status = 'ARRIVED_VERIFIED', actual_arrival_at = NOW(), actual_duration_sec = ?, residual_error_sec = ?, online_model_updated = ? WHERE id = ?`,
+          [actualDuration, residualError, task.online_model_updated, task.id]
         );
       } catch {
         // Ignore transient DB error
