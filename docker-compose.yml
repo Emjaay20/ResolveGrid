@@ -4,17 +4,17 @@ services:
     container_name: resolvegrid-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: resolvegrid_root_2026
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-resolvegrid}
       MYSQL_USER: ${MYSQL_USER:-resolvegrid}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-resolvegrid_secret_2026}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
     ports:
       - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./infra/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-presolvegrid_root_2026"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\"$MYSQL_ROOT_PASSWORD\""]
       interval: 5s
       timeout: 5s
       retries: 15
