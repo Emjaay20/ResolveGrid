@@ -27,7 +27,7 @@
         │    (Gemini / Groq / OpenAI / Anthropic + Deterministic Chain)  │
         │  • Stage B: Explainable Last-Mile ETA Engine                   │
         │    - Deterministic route, weather, access and workload baseline│
-        │    - In-memory online residual correction from verified arrivals│
+        │    - Scaled online SGD residual learning with atomic state persistence│
         └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -37,7 +37,7 @@
 
 - [`packages/shared`](./packages/shared): Canonical NIPOST 5-segment parser/assembler (`AA-99-H77-BB-55`), 36-State + FCT Legacy 6-Digit Postal Zone Bridge, Haversine & H3 spatial indexers.
 - [`apps/api`](./apps/api): Node.js + TypeScript Core API, Official NIPOST Client (`https://api.postcode.gov.ng`), Circuit Breaker, Redis `GEOSEARCH`, Redlock (`SETNX`), OSRM + Open-Meteo + OpenSky live telemetry, and HMAC-SHA256 KYC Proof-of-Location Pass signer.
-- [`apps/ml-engine`](./apps/ml-engine): Python FastAPI service running the NIPOST tool-calling agent and an explainable ETA baseline with an online residual learner. A trained model is deliberately not claimed until consented, verified arrival data is available.
+- [`apps/ml-engine`](./apps/ml-engine): Python FastAPI agent and ETA engine using a **synthetic-trained** scikit-learn gradient boosting model plus an online SGD learner. Predictive dispatch remains **disabled by default** until genuine field validation. See [ML methodology and security](./docs/ML_ENGINE_VALIDATION.md).
 - [`apps/web`](./apps/web): Next.js 15 operations console for source-aware address resolution, dispatch, field-evidence review, quality checks, and KYC verification.
 - [`apps/mobile`](./apps/mobile): React Native (Expo) field companion for provisioned agents to resolve a visit, capture consented device GPS and access observations, and retry a failed submission before leaving the app.
 - [`infra/mysql/init.sql`](./infra/mysql/init.sql) & [`infra/nginx/aetherhost.conf`](./infra/nginx/aetherhost.conf): Production MySQL 8.0 schema and Nginx reverse-proxy configuration for `aetherhost.com.ng`.
@@ -49,7 +49,7 @@
 ### Option A: One-Command Docker Compose Stack
 ```bash
 cp .env.example .env
-# Add your NIPOST_API_KEY from https://dashboard.postcode.gov.ng/register
+# Set MYSQL_ROOT_PASSWORD, MYSQL_PASSWORD, ML_SERVICE_TOKEN (random secret) and your NIPOST key before starting.
 docker compose up --build -d
 ```
 
@@ -60,7 +60,7 @@ pnpm install
 pnpm test
 
 # 2. Start Python FastAPI ML & Multi-Tool Agent Engine (Port 8000)
-pnpm dev:ml
+pnpm dev:ml  # Regenerates the synthetic scikit-learn model for this Python environment
 
 # 3. Start Node.js Core & NIPOST Gateway API (Port 4000)
 pnpm dev:api
@@ -68,6 +68,21 @@ pnpm dev:api
 # 4. Start Next.js 15 Web Console (Port 3000)
 pnpm dev:web
 ```
+
+
+### Machine learning quality and safety
+
+The ML inference and learning endpoints require the private `ML_SERVICE_TOKEN` header.
+The Docker stack does not publicly expose port 8000. The default dispatch strategy
+is deterministic; `ML_ENABLE_EXPERIMENTAL_ETA=true` opts into unvalidated synthetic
+ML predictions **for sandbox testing only**. Learning checkpoints use a persistent
+volume; duplicate arrival task IDs are ignored.
+
+Run `cd apps/ml-engine && python evaluate_eta.py` after generating the model to
+compare the trained regressor with the deterministic baseline on a different
+**synthetic** dataset. There are no verified real-world accuracy claims yet.
+Full evaluation protocol, data columns, release safety, and next steps are in
+[docs/ML_ENGINE_VALIDATION.md](./docs/ML_ENGINE_VALIDATION.md).
 
 ### Field evidence configuration
 
