@@ -28,8 +28,10 @@ export class VerificationService {
   } | null> {
     const task = store.taskMap.get(params.taskId);
     if (!task) return null;
-    // Replayed arrival evidence must not train the online model twice.
-    if (task.status === 'ARRIVED_VERIFIED') {
+    // If delivery was verified but the ML update failed, allow a safe replay.
+    // The Python learner deduplicates task IDs after a successful update.
+    const replayPendingLearning = task.status === 'ARRIVED_VERIFIED' && !task.online_model_updated;
+    if (task.status === 'ARRIVED_VERIFIED' && !replayPendingLearning) {
       return { task, online_learning_response: { updated: false, reason: 'already_verified' } };
     }
 
@@ -38,21 +40,24 @@ export class VerificationService {
       0,
       Math.round((now.getTime() - new Date(task.dispatched_at).getTime()) / 1000)
     );
-    const actualDuration =
-      params.actualDurationSec !== undefined
+    const actualDuration = replayPendingLearning && task.actual_duration_sec !== null
+      ? task.actual_duration_sec
+      : params.actualDurationSec !== undefined
         ? params.actualDurationSec
         : elapsedSinceDispatchSec;
 
     const residualError = actualDuration - task.predicted_eta_sec;
 
-    task.status = 'ARRIVED_VERIFIED';
-    task.actual_arrival_at = now.toISOString();
-    task.actual_duration_sec = actualDuration;
-    task.residual_error_sec = residualError;
+    if (!replayPendingLearning) {
+      task.status = 'ARRIVED_VERIFIED';
+      task.actual_arrival_at = now.toISOString();
+      task.actual_duration_sec = actualDuration;
+      task.residual_error_sec = residualError;
+    }
 
     // Update Last-50m Building Intelligence Graph for this NIPOST Postcode
     const postcodeEntry = store.postcodeMap.get(task.resolved_postcode);
-    if (postcodeEntry && postcodeEntry.building_telemetry) {
+    if (!replayPendingLearning && postcodeEntry && postcodeEntry.building_telemetry) {
       const bt = postcodeEntry.building_telemetry;
       if (params.measuredGateDelaySec !== undefined) {
         bt.avg_security_check_delay_sec = Math.round(
@@ -104,15 +109,22 @@ export class VerificationService {
       clearTimeout(timer);
     }
 
-    task.online_model_updated = onlineLearnResult.updated === true;
+    task.online_model_updated = onlineLearnResult.updated === true || onlineLearnResult.reason === 'duplicate_task';
     store.taskMap.set(task.id, task);
 
     if (store.mysqlPool && store.mysqlConnected) {
       try {
-        await store.mysqlPool.execute(
-          `UPDATE dispatch_tasks SET status = 'ARRIVED_VERIFIED', actual_arrival_at = NOW(), actual_duration_sec = ?, residual_error_sec = ?, online_model_updated = ? WHERE id = ?`,
-          [actualDuration, residualError, task.online_model_updated, task.id]
-        );
+        if (replayPendingLearning) {
+          await store.mysqlPool.execute(
+            'UPDATE dispatch_tasks SET online_model_updated = ? WHERE id = ?',
+            [task.online_model_updated, task.id]
+          );
+        } else {
+          await store.mysqlPool.execute(
+            `UPDATE dispatch_tasks SET status = 'ARRIVED_VERIFIED', actual_arrival_at = NOW(), actual_duration_sec = ?, residual_error_sec = ?, online_model_updated = ? WHERE id = ?`,
+            [actualDuration, residualError, task.online_model_updated, task.id]
+          );
+        }
       } catch {
         // Ignore transient DB error
       }
