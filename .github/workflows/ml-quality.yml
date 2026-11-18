@@ -2,7 +2,7 @@ name: ML quality and gateway build
 
 on:
   push:
-    branches: [improve/ml-eta-security-evaluation-20261118]
+    branches: [main, improve/ml-eta-security-evaluation-20261118]
   pull_request:
     paths:
       - "apps/ml-engine/**"

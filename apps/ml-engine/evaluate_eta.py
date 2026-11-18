@@ -18,7 +18,10 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error, root_mean_squared_error, r2_score
 
 from app.ml.train_champion import (
-    FEATURE_NAMES, deterministic_eta, generate_synthetic_nigerian_telemetry,
+    FEATURE_NAMES,
+    deterministic_eta,
+    generate_synthetic_nigerian_telemetry,
+    train_and_export,
 )
 
 MODEL = Path(__file__).resolve().parent / "app" / "ml" / "champion_model.joblib"
@@ -27,12 +30,18 @@ MODEL = Path(__file__).resolve().parent / "app" / "ml" / "champion_model.joblib"
 def evaluate(model, X, actual):
     predicted = np.maximum(45.0, np.asarray(model.predict(X), dtype=float))
     baseline = np.maximum(45.0, deterministic_eta(X))
+
     def metrics(y):
+        abs_errors = np.abs(actual - y)
         return {
             "mae_sec": round(float(mean_absolute_error(actual, y)), 2),
             "rmse_sec": round(float(root_mean_squared_error(actual, y)), 2),
+            "p50_abs_error_sec": round(float(np.percentile(abs_errors, 50)), 2),
+            "p90_abs_error_sec": round(float(np.percentile(abs_errors, 90)), 2),
+            "within_120s_rate": round(float(np.mean(abs_errors <= 120.0)), 4),
             "r2": round(float(r2_score(actual, y)), 4),
         }
+
     return {
         "trained_gradient_boosting": metrics(predicted),
         "deterministic_routing_baseline": metrics(baseline),
@@ -71,6 +80,8 @@ def main():
     parser.add_argument("--real-data", type=Path,
                         help="Optional private CSV containing consented and verified arrival records")
     args = parser.parse_args()
+    if not MODEL.exists():
+        train_and_export()
     artifact = joblib.load(MODEL)  # Only load trusted artifacts shipped with this repository
     model = artifact["model"]
     if args.real_data:

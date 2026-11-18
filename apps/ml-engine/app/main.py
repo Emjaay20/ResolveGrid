@@ -104,6 +104,14 @@ async def dispatch_eta(
         raise HTTPException(status_code=422, detail="Invalid numeric ETA features") from exc
 
 
+@app.get("/v1/ml/status")
+async def ml_status(
+    x_ml_service_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    require_ml_service_token(x_ml_service_token)
+    return eta_engine.get_status()
+
+
 @app.post("/v1/ml/learn")
 async def ml_learn(
     body: OnlineLearnRequest,

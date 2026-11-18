@@ -109,6 +109,34 @@ class OnlineLearningReliabilityTests(unittest.TestCase):
         self.assertIsNone(status["rolling_mae_sec"])
         self.assertIsNone(status["rolling_rmse_sec"])
         self.assertFalse(status["online_state_persistence_configured"])
+        self.assertFalse(status["drift_monitoring"]["drift_alert"])
+        self.assertFalse(status["promotion_gate"]["eligible_for_production_ml"])
+
+    def test_status_endpoint_requires_token_and_reports_drift_alert(self):
+        client = TestClient(app)
+        with patch.dict(os.environ, {"ML_SERVICE_TOKEN": "secret-for-tests"}):
+            unauth = client.get("/v1/ml/status")
+            self.assertEqual(unauth.status_code, 401)
+            auth = client.get("/v1/ml/status", headers={"X-ML-Service-Token": "secret-for-tests"})
+            self.assertEqual(auth.status_code, 200)
+            body = auth.json()
+            self.assertIn("drift_monitoring", body)
+            self.assertIn("promotion_gate", body)
+
+        with patch.dict(os.environ, {"ML_STATE_PATH": "", "ML_DRIFT_MAE_THRESHOLD_SEC": "50.0"}):
+            engine = HybridChampionChallengerEngine()
+            for i in range(10):
+                engine.learn_one(dict(
+                    CANDIDATE,
+                    task_id=f"drift-task-{i}",
+                    postcode="FC-02-A09-DB-09",
+                    actual_duration_sec=800,
+                    predicted_eta_sec=300,
+                ))
+            status = engine.get_status()
+            self.assertTrue(status["drift_monitoring"]["drift_alert"])
+            self.assertTrue(status["promotion_gate"]["blocked_by_drift"])
+            self.assertGreater(status["drift_monitoring"]["rolling_p90_abs_error_sec"], 50.0)
 
 
 if __name__ == "__main__":

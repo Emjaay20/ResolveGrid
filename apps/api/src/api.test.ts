@@ -152,3 +152,59 @@ test('a workspace dispatch can be assigned to a named field agent', async () => 
   const enRoute = await taskLifecycleService.fieldAction(dispatched.task.id, 'field_pilot_01', 'EN_ROUTE');
   assert.equal(enRoute.status, 'EN_ROUTE');
 });
+
+test('verificationService queues failed ML feedback and flushes when ML engine recovers', async (t) => {
+  const http = await import('node:http');
+  const dispatched = await dispatchService.dispatchTask({
+    idempotencyKey: `outbox_retry_${Date.now()}`,
+    tenantId: 'pilot_workspace_test',
+    postcode: 'FC-02-A09-DB-09',
+  });
+
+  const svc = verificationService as unknown as {
+    mlEngineUrl: string;
+    verifyTaskArrivalAndLearn: typeof verificationService.verifyTaskArrivalAndLearn;
+    flushPendingMlFeedback: typeof verificationService.flushPendingMlFeedback;
+    getPendingMlFeedbackCount: typeof verificationService.getPendingMlFeedbackCount;
+  };
+  const originalUrl = svc.mlEngineUrl;
+  const originalToken = process.env.ML_SERVICE_TOKEN;
+  svc.mlEngineUrl = 'http://127.0.0.1:1'; // unreachable port to simulate outage
+
+  try {
+    const first = await svc.verifyTaskArrivalAndLearn({
+      taskId: dispatched.task.id,
+      actualDurationSec: 410,
+      measuredGateDelaySec: 35,
+    });
+    assert.ok(first);
+    assert.equal(first.task.online_model_updated, false);
+    assert.equal(first.online_learning_response.queued_for_retry, true);
+    assert.ok(svc.getPendingMlFeedbackCount() >= 1);
+
+    let receivedToken: string | undefined;
+    const mockMl = http.createServer((req, res) => {
+      receivedToken = req.headers['x-ml-service-token'] as string | undefined;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ updated: true, task_id: dispatched.task.id }));
+    });
+    t.after(() => mockMl.close());
+    await new Promise<void>((resolve) => mockMl.listen(0, '127.0.0.1', resolve));
+    const { port } = mockMl.address() as AddressInfo;
+
+    process.env.ML_SERVICE_TOKEN = 'test-ml-token';
+    svc.mlEngineUrl = `http://127.0.0.1:${port}`;
+    const flushed = await svc.flushPendingMlFeedback();
+    assert.ok(flushed.flushed >= 1);
+    assert.equal(flushed.remaining, 0);
+    assert.equal(receivedToken, 'test-ml-token');
+    assert.equal(store.taskMap.get(dispatched.task.id)?.online_model_updated, true);
+  } finally {
+    svc.mlEngineUrl = originalUrl;
+    if (originalToken === undefined) {
+      delete process.env.ML_SERVICE_TOKEN;
+    } else {
+      process.env.ML_SERVICE_TOKEN = originalToken;
+    }
+  }
+});

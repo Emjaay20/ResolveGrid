@@ -8,9 +8,105 @@ import {
 } from '../config/datastore';
 import { nipostClient } from '../clients/nipostClient';
 
+export interface MlLearnPayload {
+  task_id: string;
+  postcode: string;
+  road_distance_m: number;
+  osrm_base_duration_sec: number;
+  gate_delay_sec: number;
+  compound_walk_meters: number;
+  velocity_kmh: number;
+  rolling_1h_on_time_rate: number;
+  active_load: number;
+  rain_mm: number;
+  predicted_eta_sec: number;
+  actual_duration_sec: number;
+}
+
+interface PendingMlFeedbackItem {
+  payload: MlLearnPayload;
+  attempts: number;
+  queuedAt: string;
+}
+
 export class VerificationService {
   private mlEngineUrl = (process.env.ML_ENGINE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
   private kycSecret = process.env.KYC_SIGNING_SECRET?.trim() || '';
+  private pendingMlFeedback = new Map<string, PendingMlFeedbackItem>();
+  private outboxTimer: NodeJS.Timeout | null = null;
+
+  constructor() {
+    if (process.env.NODE_ENV !== 'test') {
+      this.outboxTimer = setInterval(() => {
+        void this.flushPendingMlFeedback();
+      }, 15000);
+      this.outboxTimer.unref();
+    }
+  }
+
+  public getPendingMlFeedbackCount(): number {
+    return this.pendingMlFeedback.size;
+  }
+
+  private async sendMlLearnPayload(payload: MlLearnPayload): Promise<Record<string, unknown> | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    try {
+      const res = await fetch(`${this.mlEngineUrl}/v1/ml/learn`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-ML-Service-Token': process.env.ML_SERVICE_TOKEN || '',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        return (await res.json()) as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      clearTimeout(timer);
+      return null;
+    }
+  }
+
+  /**
+   * Replays queued verified-arrival observations that failed while the ML service
+   * was unreachable or restarting.
+   */
+  public async flushPendingMlFeedback(): Promise<{ flushed: number; remaining: number }> {
+    let flushed = 0;
+    for (const [taskId, item] of this.pendingMlFeedback.entries()) {
+      const result = await this.sendMlLearnPayload(item.payload);
+      if (result && (result.updated === true || result.reason === 'duplicate_task')) {
+        this.pendingMlFeedback.delete(taskId);
+        flushed += 1;
+        const task = store.taskMap.get(taskId);
+        if (task) {
+          task.online_model_updated = true;
+          store.taskMap.set(taskId, task);
+        }
+        if (store.mysqlPool && store.mysqlConnected) {
+          try {
+            await store.mysqlPool.execute(
+              'UPDATE dispatch_tasks SET online_model_updated = ? WHERE id = ?',
+              [true, taskId]
+            );
+          } catch {
+            // Ignore transient DB error
+          }
+        }
+      } else {
+        item.attempts += 1;
+        if (item.attempts >= 50) {
+          this.pendingMlFeedback.delete(taskId);
+        }
+      }
+    }
+    return { flushed, remaining: this.pendingMlFeedback.size };
+  }
 
   /**
    * Records physical ground-truth arrival at the target NIPOST building geofence,
@@ -73,40 +169,38 @@ export class VerificationService {
     }
 
     // Trigger the FastAPI online residual learner (POST /v1/ml/learn)
-    let onlineLearnResult: Record<string, unknown> = {
-      updated: false,
-      mode: 'model_service_unavailable',
-    };
     const assignedAgent = store.agentMap.get(task.assigned_agent_id);
+    const mlPayload: MlLearnPayload = {
+      task_id: task.id,
+      postcode: task.resolved_postcode,
+      road_distance_m: task.road_distance_m,
+      osrm_base_duration_sec: task.osrm_base_duration_sec,
+      gate_delay_sec: params.measuredGateDelaySec ?? task.gate_delay_sec,
+      compound_walk_meters: postcodeEntry?.building_telemetry?.compound_walk_meters ?? 25,
+      velocity_kmh: assignedAgent?.velocity_kmh ?? 30,
+      rolling_1h_on_time_rate: assignedAgent?.rolling_1h_on_time_rate ?? 0.96,
+      active_load: assignedAgent?.active_load ?? 0,
+      rain_mm: task.weather_rain_mm,
+      predicted_eta_sec: task.predicted_eta_sec,
+      actual_duration_sec: actualDuration,
+    };
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2000);
-    try {
-      const res = await fetch(`${this.mlEngineUrl}/v1/ml/learn`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-ML-Service-Token': process.env.ML_SERVICE_TOKEN || '' },
-        body: JSON.stringify({
-          task_id: task.id,
-          postcode: task.resolved_postcode,
-          road_distance_m: task.road_distance_m,
-          osrm_base_duration_sec: task.osrm_base_duration_sec,
-          gate_delay_sec: params.measuredGateDelaySec ?? task.gate_delay_sec,
-          compound_walk_meters: postcodeEntry?.building_telemetry?.compound_walk_meters ?? 25,
-          velocity_kmh: assignedAgent?.velocity_kmh ?? 30,
-          rolling_1h_on_time_rate: assignedAgent?.rolling_1h_on_time_rate ?? 0.96,
-          active_load: assignedAgent?.active_load ?? 0,
-          rain_mm: task.weather_rain_mm,
-          predicted_eta_sec: task.predicted_eta_sec,
-          actual_duration_sec: actualDuration,
-        }),
-        signal: controller.signal,
+    const mlResponse = await this.sendMlLearnPayload(mlPayload);
+    let onlineLearnResult: Record<string, unknown>;
+    if (mlResponse) {
+      onlineLearnResult = mlResponse;
+      this.pendingMlFeedback.delete(task.id);
+    } else {
+      this.pendingMlFeedback.set(task.id, {
+        payload: mlPayload,
+        attempts: 1,
+        queuedAt: now.toISOString(),
       });
-      clearTimeout(timer);
-      if (res.ok) {
-        onlineLearnResult = (await res.json()) as Record<string, unknown>;
-      }
-    } catch {
-      clearTimeout(timer);
+      onlineLearnResult = {
+        updated: false,
+        queued_for_retry: true,
+        mode: 'model_service_unavailable',
+      };
     }
 
     task.online_model_updated = onlineLearnResult.updated === true || onlineLearnResult.reason === 'duplicate_task';

@@ -1,3 +1,4 @@
+from collections import deque
 import math
 import os
 import tempfile
@@ -41,7 +42,11 @@ class HybridChampionChallengerEngine:
         self._saved_state = False
         # Unvalidated synthetic models must not drive real-world dispatch by default.
         self._experimental_eta_enabled = os.getenv("ML_ENABLE_EXPERIMENTAL_ETA", "false").lower() in {"1", "true", "yes"}
+        self._max_seen_tasks = 50000
+        self._seen_task_order: deque[str] = deque()
         self._seen_task_ids: set[str] = set()
+        self._drift_mae_threshold_sec = float(os.getenv("ML_DRIFT_MAE_THRESHOLD_SEC", "180.0"))
+        self._min_verified_arrivals_for_gate = int(os.getenv("ML_MIN_VERIFIED_ARRIVALS", "30"))
         self.online_samples_learned: int = 0
         self.learning_rate: float = 0.08
         self.postcode_residual_ema: Dict[str, float] = {}
@@ -100,7 +105,9 @@ class HybridChampionChallengerEngine:
             self.online_samples_learned = int(snapshot["online_samples_learned"])
             self.postcode_residual_ema = dict(snapshot["postcode_residual_ema"])
             self.recent_residuals = list(snapshot["recent_residuals"])[-100:]
-            self._seen_task_ids = set(snapshot["seen_task_ids"])
+            loaded_ids = list(snapshot["seen_task_ids"])[-self._max_seen_tasks:]
+            self._seen_task_order = deque(loaded_ids)
+            self._seen_task_ids = set(loaded_ids)
             self._saved_state = True
         except Exception as exc:
             # Keep the service available; never interpret a corrupted state as verified learning.
@@ -253,7 +260,12 @@ class HybridChampionChallengerEngine:
             prev_bias = self.postcode_residual_ema.get(postcode, 0.0)
             new_bias = 0.72 * prev_bias + 0.28 * residual
             self.postcode_residual_ema[postcode] = round(new_bias, 3)
-            self._seen_task_ids.add(task_id)
+            if task_id not in self._seen_task_ids:
+                if len(self._seen_task_order) >= self._max_seen_tasks:
+                    evicted = self._seen_task_order.popleft()
+                    self._seen_task_ids.discard(evicted)
+                self._seen_task_order.append(task_id)
+                self._seen_task_ids.add(task_id)
             self.online_samples_learned += 1
             self.recent_residuals.append(residual)
             self.recent_residuals = self.recent_residuals[-100:]
@@ -277,6 +289,13 @@ class HybridChampionChallengerEngine:
         # IMPORTANT: synthetic fit scores are not real delivery accuracy.
         recent_mae = float(np.mean(np.abs(self.recent_residuals))) if self.recent_residuals else None
         recent_rmse = float(np.sqrt(np.mean(np.square(self.recent_residuals)))) if self.recent_residuals else None
+        recent_p90 = float(np.percentile(np.abs(self.recent_residuals), 90)) if self.recent_residuals else None
+        recent_bias = float(np.mean(self.recent_residuals)) if self.recent_residuals else None
+        drift_alert = (
+            len(self.recent_residuals) >= 10
+            and recent_mae is not None
+            and recent_mae > self._drift_mae_threshold_sec
+        )
         return {
             "champion_model": "Synthetic-data ETA baseline (scikit-learn gradient boosting)",
             "champion_training_data": "SYNTHETIC_SIMULATION",
@@ -293,6 +312,22 @@ class HybridChampionChallengerEngine:
             "online_samples_learned": self.online_samples_learned,
             "rolling_mae_sec": round(recent_mae, 2) if recent_mae is not None else None,
             "rolling_rmse_sec": round(recent_rmse, 2) if recent_rmse is not None else None,
+            "drift_monitoring": {
+                "recent_sample_count": len(self.recent_residuals),
+                "rolling_mae_sec": round(recent_mae, 2) if recent_mae is not None else None,
+                "rolling_rmse_sec": round(recent_rmse, 2) if recent_rmse is not None else None,
+                "rolling_p90_abs_error_sec": round(recent_p90, 2) if recent_p90 is not None else None,
+                "rolling_bias_sec": round(recent_bias, 2) if recent_bias is not None else None,
+                "drift_threshold_mae_sec": self._drift_mae_threshold_sec,
+                "drift_alert": drift_alert,
+            },
+            "promotion_gate": {
+                "eligible_for_production_ml": False,
+                "min_verified_arrivals_for_gate": self._min_verified_arrivals_for_gate,
+                "observed_verified_arrivals": self.online_samples_learned,
+                "requires_chronological_field_eval": True,
+                "blocked_by_drift": drift_alert,
+            },
             "online_state_persistence_configured": self._state_path is not None,
             "online_state_persisted": self._saved_state,
             "feature_importances": self.feature_importances,
