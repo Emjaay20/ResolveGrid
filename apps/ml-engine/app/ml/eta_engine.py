@@ -1,10 +1,15 @@
 import math
+import os
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import joblib
 import numpy as np
 from sklearn.linear_model import SGDRegressor
+from sklearn.preprocessing import StandardScaler
+from .train_champion import generate_synthetic_nigerian_telemetry
 
 MODEL_PATH = Path(__file__).resolve().parent / "champion_model.joblib"
 
@@ -31,6 +36,10 @@ class HybridChampionChallengerEngine:
     """
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._state_path = Path(os.environ['ML_STATE_PATH']) if os.getenv('ML_STATE_PATH') else None
+        self._saved_state = False
+        self._seen_task_ids: set[str] = set()
         self.online_samples_learned: int = 0
         self.learning_rate: float = 0.08
         self.postcode_residual_ema: Dict[str, float] = {}
@@ -64,24 +73,64 @@ class HybridChampionChallengerEngine:
             except Exception:
                 self.champion_model = None
 
-        # 2. Initialize Streaming Challenger Model (SGDRegressor with partial_fit support)
+        # Fixed, reproducible normalization: never send unscaled durations to SGD.
+        # This warm start also uses SYNTHETIC data, not real delivery outcomes.
+        X_init, y_init = generate_synthetic_nigerian_telemetry(n_samples=1000, seed=314)
+        self.scaler = StandardScaler().fit(X_init)
         self.sgd_challenger = SGDRegressor(
-            loss="squared_error",
-            penalty="l2",
-            alpha=0.001,
-            learning_rate="adaptive",
-            eta0=0.01,
-            warm_start=True,
-            random_state=42,
+            loss="squared_error", penalty="l2", alpha=0.001,
+            learning_rate="adaptive", eta0=0.005, max_iter=3000,
+            tol=0.0001, random_state=42,
         )
-        # Prime the online regressor on standard baseline points
-        X_init = np.array([
-            [180.0, 45.0, 25.0, 0.0, 10.0, 30.0, 0.96, 0.0],
-            [360.0, 90.0, 50.0, 5.0, 15.0, 25.0, 0.92, 1.0],
-            [600.0, 150.0, 80.0, 12.0, 20.0, 20.0, 0.88, 2.0],
-        ])
-        y_init = np.array([280.0, 560.0, 940.0])
-        self.sgd_challenger.partial_fit(X_init, y_init)
+        self.sgd_challenger.fit(self.scaler.transform(X_init), y_init)
+        self._load_online_state()
+
+    def _load_online_state(self) -> None:
+        """Only read the application-owned state file; joblib must never load user uploads."""
+        if self._state_path is None or not self._state_path.exists():
+            return
+        try:
+            snapshot = joblib.load(self._state_path)
+            if snapshot.get("version") != 1 or snapshot.get("features") != FEATURE_NAMES:
+                return
+            self.scaler = snapshot["scaler"]
+            self.sgd_challenger = snapshot["model"]
+            self.online_samples_learned = int(snapshot["online_samples_learned"])
+            self.postcode_residual_ema = dict(snapshot["postcode_residual_ema"])
+            self.recent_residuals = list(snapshot["recent_residuals"])[-100:]
+            self._seen_task_ids = set(snapshot["seen_task_ids"])
+            self._saved_state = True
+        except Exception as exc:
+            # Keep the service available; never interpret a corrupted state as verified learning.
+            print(f"Warning: ignoring unreadable ML online state: {type(exc).__name__}")
+
+    def _save_online_state(self) -> bool:
+        if self._state_path is None:
+            return False
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        handle, temporary = tempfile.mkstemp(prefix=".online-state-", suffix=".joblib", dir=self._state_path.parent)
+        os.close(handle)
+        try:
+            os.chmod(temporary, 0o600)
+            joblib.dump({
+                "version": 1,
+                "features": FEATURE_NAMES,
+                "scaler": self.scaler,
+                "model": self.sgd_challenger,
+                "online_samples_learned": self.online_samples_learned,
+                "postcode_residual_ema": self.postcode_residual_ema,
+                "recent_residuals": self.recent_residuals[-100:],
+                "seen_task_ids": sorted(self._seen_task_ids),
+            }, temporary)
+            os.replace(temporary, self._state_path)
+            self._saved_state = True
+            return True
+        except OSError:
+            self._saved_state = False
+            return False
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def _extract_feature_row(self, c: Dict[str, Any]) -> List[float]:
         return [
@@ -117,6 +166,8 @@ class HybridChampionChallengerEngine:
 
         # Vectorized feature matrix extraction
         X = np.array([self._extract_feature_row(c) for c in candidates])
+        if not np.isfinite(X).all():
+            raise ValueError("ETA features must be finite numeric values")
 
         # 1. Champion Model Predictions (GBDT Regressor)
         if self.champion_model is not None:
@@ -134,7 +185,7 @@ class HybridChampionChallengerEngine:
 
         # 2. Challenger Model Predictions (Online Streaming SGD + Postcode Memory)
         try:
-            challenger_preds = self.sgd_challenger.predict(X) + postcode_adj
+            challenger_preds = self.sgd_challenger.predict(self.scaler.transform(X)) + postcode_adj
         except Exception:
             challenger_preds = champion_preds + postcode_adj
 
@@ -143,7 +194,7 @@ class HybridChampionChallengerEngine:
 
         for i, c in enumerate(candidates):
             c_eta = max(45, int(round(float(champion_preds[i]) * profile_mult)))
-            ch_eta = max(45, int(round(float(challenger_preds[i]) * profile_mult)))
+            ch_eta = max(45, min(86400, int(round(float(challenger_preds[i]) * profile_mult))))
             final_eta = max(45, int(round((1.0 - challenger_blend) * c_eta + challenger_blend * ch_eta)))
 
             osrm_dur = int(round(X[i, 0]))
@@ -160,8 +211,10 @@ class HybridChampionChallengerEngine:
                     "osrm_base_duration_sec": osrm_dur,
                     "gate_delay_sec": gate_delay,
                     "weather_penalty_sec": rain_penalty,
-                    "champion_lgbm_eta_sec": c_eta,
-                    "challenger_river_eta_sec": ch_eta,
+                    "champion_lgbm_eta_sec": c_eta,  # legacy compatibility field
+                    "challenger_river_eta_sec": ch_eta,  # legacy compatibility field
+                    "champion_gradient_boosting_eta_sec": c_eta,
+                    "challenger_sgd_eta_sec": ch_eta,
                     "final_predicted_eta_sec": final_eta,
                 }
             )
@@ -179,81 +232,69 @@ class HybridChampionChallengerEngine:
         }
 
     def learn_one(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Online single-sample update triggered when a courier or mobile field agent
-        logs physical building arrival. Updates Scikit-Learn's SGDRegressor via partial_fit
-        and updates the per-postcode EMA residual bias memory.
-        """
+        """Idempotent online learning from authenticated, task-verified arrivals."""
         t0 = time.perf_counter()
-        postcode = str(payload.get("postcode", "FC-02-A09-DB-09"))
-        predicted = float(payload.get("predicted_eta_sec", 240))
-        actual = float(payload.get("actual_duration_sec", 245))
-        residual = actual - predicted
-
-        # 1. Update Per-Postcode EMA Residual Bias
-        prev_bias = self.postcode_residual_ema.get(postcode, 0.0)
-        new_bias = 0.72 * prev_bias + 0.28 * residual
-        self.postcode_residual_ema[postcode] = round(new_bias, 3)
-
-        # 2. Online partial_fit step on Scikit-Learn SGDRegressor
-        row = [
-            float(payload.get("osrm_base_duration_sec", 180)),
-            float(payload.get("gate_delay_sec", 45)),
-            float(payload.get("compound_walk_meters", 25)),
-            float(payload.get("rain_mm", 0.0)),
-            float(payload.get("wind_speed_kmh", 10.0)),
-            float(payload.get("velocity_kmh", 30.0)),
-            float(payload.get("rolling_1h_on_time_rate", 0.96)),
-            float(payload.get("active_load", 0)),
-        ]
-        X_sample = np.array([row])
-        y_sample = np.array([actual])
-        try:
-            self.sgd_challenger.partial_fit(X_sample, y_sample)
-        except Exception:
-            pass
-
-        self.online_samples_learned += 1
-        self.recent_residuals.append(residual)
-        if len(self.recent_residuals) > 100:
-            self.recent_residuals.pop(0)
-
-        mae = sum(abs(r) for r in self.recent_residuals) / len(self.recent_residuals)
-        rmse = math.sqrt(sum(r * r for r in self.recent_residuals) / len(self.recent_residuals))
-        elapsed_ms = round((time.perf_counter() - t0) * 1000, 3)
-
-        return {
-            "updated": True,
-            "postcode": postcode,
-            "residual_error_sec": round(residual, 2),
-            "new_postcode_bias_sec": round(new_bias, 2),
-            "online_samples_learned": self.online_samples_learned,
-            "rolling_mae_sec": round(mae, 2),
-            "rolling_rmse_sec": round(rmse, 2),
-            "update_latency_ms": elapsed_ms,
-        }
+        task_id = str(payload.get("task_id", "")).strip()
+        postcode = str(payload.get("postcode", "")).strip()
+        actual = float(payload.get("actual_duration_sec", 0))
+        predicted = float(payload.get("predicted_eta_sec", 0))
+        if not task_id or not postcode or not (0 < actual <= 86400 and 0 < predicted <= 86400):
+            raise ValueError("A valid task, postcode, actual and predicted duration are required")
+        row = self._extract_feature_row(payload)
+        if not np.isfinite(row).all():
+            raise ValueError("Learning features must be finite")
+        with self._lock:
+            if task_id in self._seen_task_ids:
+                return {"updated": False, "reason": "duplicate_task", "task_id": task_id,
+                        "online_samples_learned": self.online_samples_learned}
+            residual = actual - predicted
+            # The scaler is fixed from baseline training to keep coefficients interpretable
+            # across partial_fit calls. Refit scaler + model together in an offline release.
+            sample = self.scaler.transform(np.array([row], dtype=float))
+            self.sgd_challenger.partial_fit(sample, np.array([actual]))
+            prev_bias = self.postcode_residual_ema.get(postcode, 0.0)
+            new_bias = 0.72 * prev_bias + 0.28 * residual
+            self.postcode_residual_ema[postcode] = round(new_bias, 3)
+            self._seen_task_ids.add(task_id)
+            self.online_samples_learned += 1
+            self.recent_residuals.append(residual)
+            self.recent_residuals = self.recent_residuals[-100:]
+            mae = float(np.mean(np.abs(self.recent_residuals)))
+            rmse = float(np.sqrt(np.mean(np.square(self.recent_residuals))))
+            persisted = self._save_online_state()
+            return {
+                "updated": True,
+                "persisted": persisted,
+                "task_id": task_id,
+                "postcode": postcode,
+                "residual_error_sec": round(residual, 2),
+                "new_postcode_bias_sec": round(new_bias, 2),
+                "online_samples_learned": self.online_samples_learned,
+                "rolling_mae_sec": round(mae, 2),
+                "rolling_rmse_sec": round(rmse, 2),
+                "update_latency_ms": round((time.perf_counter() - t0) * 1000, 3),
+            }
 
     def get_status(self) -> Dict[str, Any]:
-        mae = (
-            sum(abs(r) for r in self.recent_residuals) / max(1, len(self.recent_residuals))
-            if self.recent_residuals
-            else self.val_mae
-        )
+        # IMPORTANT: synthetic fit scores are not real delivery accuracy.
+        recent_mae = float(np.mean(np.abs(self.recent_residuals))) if self.recent_residuals else None
+        recent_rmse = float(np.sqrt(np.mean(np.square(self.recent_residuals)))) if self.recent_residuals else None
         return {
-            # The baseline was fitted on simulated trips only. Its fit statistics describe
-            # the simulator, not real deliveries, so they are reported separately and
-            # never as a headline accuracy claim.
-            "champion_model": "Synthetic-data ETA baseline (gradient boosting; not validated on real arrivals)",
+            "champion_model": "Synthetic-data ETA baseline (scikit-learn gradient boosting)",
             "champion_training_data": "SYNTHETIC_SIMULATION",
             "validated_on_real_arrivals": False,
             "synthetic_fit": {
                 "r2": round(float(self.val_r2), 3),
                 "mae_sec": round(float(self.val_mae), 1),
-                "note": "Measured against simulated trips; not evidence of real-world accuracy.",
+                "rmse_sec": round(float(self.val_rmse), 1),
+                "note": "Synthetic holdout only; never present as real-world delivery accuracy.",
             },
-            "challenger_model": "Online residual learner (SGD partial_fit + per-postcode memory)",
+            "challenger_model": "Scaled online SGDRegressor + postcode EMA",
             "online_samples_learned": self.online_samples_learned,
-            "rolling_mae_sec": round(mae, 2),
+            "rolling_mae_sec": round(recent_mae, 2) if recent_mae is not None else None,
+            "rolling_rmse_sec": round(recent_rmse, 2) if recent_rmse is not None else None,
+            "online_state_persistence_configured": self._state_path is not None,
+            "online_state_persisted": self._saved_state,
             "feature_importances": self.feature_importances,
             "postcode_residual_biases_sec": self.postcode_residual_ema,
         }
