@@ -36,6 +36,15 @@ class MLServiceSecurityTests(unittest.TestCase):
             })
         self.assertEqual(result.status_code, 503)
 
+    def test_invalid_candidate_numeric_input_returns_422(self):
+        with patch.dict(os.environ, {"ML_SERVICE_TOKEN": "secret-for-tests"}):
+            result = self.client.post("/v1/ml/dispatch-eta",
+                headers={"X-ML-Service-Token": "secret-for-tests"}, json={
+                    "postcode": "FC-02-A09-DB-09",
+                    "candidates": [dict(CANDIDATE, rain_mm="not-a-number")],
+                })
+        self.assertEqual(result.status_code, 422)
+
     def test_rejects_wrong_key_for_inference_and_learning(self):
         with patch.dict(os.environ, {"ML_SERVICE_TOKEN": "secret-for-tests"}):
             result = self.client.post("/v1/ml/dispatch-eta",
@@ -95,6 +104,8 @@ class OnlineLearningReliabilityTests(unittest.TestCase):
         status = engine.get_status()
         self.assertEqual(status["champion_training_data"], "SYNTHETIC_SIMULATION")
         self.assertFalse(status["validated_on_real_arrivals"])
+        self.assertEqual(status["active_eta_strategy"], "DETERMINISTIC_BASELINE")
+        self.assertFalse(status["experimental_eta_enabled"])
         self.assertIsNone(status["rolling_mae_sec"])
         self.assertIsNone(status["rolling_rmse_sec"])
         self.assertFalse(status["online_state_persistence_configured"])
