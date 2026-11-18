@@ -9,7 +9,7 @@ services:
       MYSQL_USER: ${MYSQL_USER:-resolvegrid}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-resolvegrid_secret_2026}
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./infra/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
@@ -25,7 +25,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -45,8 +45,12 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       API_BASE_URL: http://api:4000
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:?Set ML_SERVICE_TOKEN in .env}
+      ML_STATE_PATH: /var/lib/resolvegrid-ml/online_state.joblib
     ports:
-      - "8000:8000"
+      # Internal ML service: never publish the learning endpoint on the host.
+    volumes:
+      - ml_online_state:/var/lib/resolvegrid-ml
     depends_on:
       redis:
         condition: service_healthy
@@ -64,6 +68,7 @@ services:
       MYSQL_PORT: 3306
       REDIS_URL: redis://redis:6379
       ML_ENGINE_URL: http://ml-engine:8000
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:?Set ML_SERVICE_TOKEN in .env}
     ports:
       - "4000:4000"
     depends_on:
@@ -91,5 +96,6 @@ services:
       - api
 
 volumes:
+  ml_online_state:
   mysql_data:
   redis_data:
