@@ -28,7 +28,12 @@ test('nipostClient resolves deterministic postcode fixtures with L3 attributes',
   const refStates = await nipostClient.getReferenceHierarchy({ state: 'FC' });
   assert.ok(refStates.data);
   const metrics = nipostClient.getMetrics();
-  assert.equal(metrics.key_status, 'SANDBOX_TEST_KEY');
+  assert.equal(
+    metrics.key_status,
+    process.env.NIPOST_API_KEY?.startsWith('nipost_test_')
+      ? 'SANDBOX_TEST_KEY'
+      : 'AWAITING_DASHBOARD_KEY'
+  );
   assert.equal(metrics.upstream_failures, 0);
 });
 
