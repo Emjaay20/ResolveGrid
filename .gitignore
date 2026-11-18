@@ -13,3 +13,5 @@ venv/
 !.env.example
 *.log
 .DS_Store
+# Generated ML artifacts must be reproducible; never commit pickle/joblib binaries.
+apps/ml-engine/app/ml/*.joblib
