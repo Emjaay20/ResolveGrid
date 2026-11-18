@@ -22,7 +22,8 @@ RUN apt-get update \
 
 COPY --from=build /app /app
 RUN python3 -m venv /opt/resolvegrid-venv \
-  && /opt/resolvegrid-venv/bin/pip install --no-cache-dir -r apps/ml-engine/requirements.txt
+  && /opt/resolvegrid-venv/bin/pip install --no-cache-dir -r apps/ml-engine/requirements.txt \
+  && (cd /app/apps/ml-engine && /opt/resolvegrid-venv/bin/python -m app.ml.train_champion)
 
 ENV PATH="/opt/resolvegrid-venv/bin:$PATH" \
   NODE_ENV=production \

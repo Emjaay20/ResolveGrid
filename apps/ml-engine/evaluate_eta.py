@@ -10,7 +10,7 @@ FEATURE_NAMES from app/ml/train_champion.py. Do not commit personal trip records
 import argparse
 import csv
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import joblib
@@ -79,14 +79,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--real-data", type=Path,
                         help="Optional private CSV containing consented and verified arrival records")
+    parser.add_argument("--write-promotion-gate", type=Path,
+                        help="Optional path to write a versioned promotion-gate evaluation manifest")
     args = parser.parse_args()
     if not MODEL.exists():
         train_and_export()
     artifact = joblib.load(MODEL)  # Only load trusted artifacts shipped with this repository
     model = artifact["model"]
+    evaluated_at = datetime.now(timezone.utc).isoformat()
     if args.real_data:
         X, actual, total = read_verified_arrivals(args.real_data)
         report = {
+            "evaluated_at": evaluated_at,
             "dataset": "VERIFIED_FIELD_ARRIVALS",
             "status": "Preliminary field benchmark, not production validation",
             "records": total,
@@ -97,12 +101,16 @@ def main():
         # Different RNG seed than training; still from the SAME simulator.
         X, actual = generate_synthetic_nigerian_telemetry(n_samples=1000, seed=719)
         report = {
+            "evaluated_at": evaluated_at,
             "dataset": "SYNTHETIC_SIMULATION",
             "real_arrival_validated": False,
             "records": len(actual),
             "note": "Independent synthetic seed, same simulator. This cannot predict field performance.",
             "results": evaluate(model, X, actual),
         }
+    if args.write_promotion_gate:
+        args.write_promotion_gate.parent.mkdir(parents=True, exist_ok=True)
+        args.write_promotion_gate.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
 
 

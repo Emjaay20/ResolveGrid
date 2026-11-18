@@ -1,4 +1,12 @@
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+
+if (!process.env.ML_SERVICE_TOKEN) {
+  process.env.ML_SERVICE_TOKEN = crypto.randomBytes(32).toString('hex');
+}
+if (!process.env.ML_STATE_PATH) {
+  process.env.ML_STATE_PATH = '/tmp/resolvegrid-ml/online_state.joblib';
+}
 
 const children = [];
 

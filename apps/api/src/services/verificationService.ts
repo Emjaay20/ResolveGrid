@@ -26,13 +26,19 @@ export interface MlLearnPayload {
 interface PendingMlFeedbackItem {
   payload: MlLearnPayload;
   attempts: number;
+  status: 'PENDING' | 'DEAD_LETTER';
+  nextRetryAtMs: number;
+  lastError: string | null;
   queuedAt: string;
 }
+
+const MAX_OUTBOX_ATTEMPTS = 20;
 
 export class VerificationService {
   private mlEngineUrl = (process.env.ML_ENGINE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
   private kycSecret = process.env.KYC_SIGNING_SECRET?.trim() || '';
   private pendingMlFeedback = new Map<string, PendingMlFeedbackItem>();
+  private outboxSchemaReady = false;
   private outboxTimer: NodeJS.Timeout | null = null;
 
   constructor() {
@@ -45,7 +51,98 @@ export class VerificationService {
   }
 
   public getPendingMlFeedbackCount(): number {
-    return this.pendingMlFeedback.size;
+    let count = 0;
+    for (const item of this.pendingMlFeedback.values()) {
+      if (item.status === 'PENDING') count += 1;
+    }
+    return count;
+  }
+
+  public getDeadLetterCount(): number {
+    let count = 0;
+    for (const item of this.pendingMlFeedback.values()) {
+      if (item.status === 'DEAD_LETTER') count += 1;
+    }
+    return count;
+  }
+
+  public async getOutboxSummary(): Promise<{ pending: number; dead_letter: number; durable_mysql: boolean }> {
+    if (store.mysqlPool && store.mysqlConnected) {
+      try {
+        await this.ensureOutboxSchema();
+        const [rows] = await store.mysqlPool.query(
+          `SELECT status, COUNT(*) AS cnt FROM ml_learning_outbox WHERE status IN ('PENDING', 'DEAD_LETTER') GROUP BY status`
+        );
+        let pending = 0;
+        let deadLetter = 0;
+        for (const row of rows as Array<{ status: string; cnt: number }>) {
+          if (row.status === 'PENDING') pending = Number(row.cnt);
+          if (row.status === 'DEAD_LETTER') deadLetter = Number(row.cnt);
+        }
+        return { pending, dead_letter: deadLetter, durable_mysql: true };
+      } catch {
+        // Fall through to in-memory summary
+      }
+    }
+    return {
+      pending: this.getPendingMlFeedbackCount(),
+      dead_letter: this.getDeadLetterCount(),
+      durable_mysql: false,
+    };
+  }
+
+  private async ensureOutboxSchema(): Promise<void> {
+    if (this.outboxSchemaReady || !store.mysqlPool || !store.mysqlConnected) return;
+    await store.mysqlPool.execute(`
+      CREATE TABLE IF NOT EXISTS ml_learning_outbox (
+        task_id VARCHAR(128) PRIMARY KEY,
+        payload JSON NOT NULL,
+        status ENUM('PENDING', 'COMPLETED', 'DEAD_LETTER') NOT NULL DEFAULT 'PENDING',
+        attempts INT NOT NULL DEFAULT 0,
+        next_retry_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_error VARCHAR(255) DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_ml_outbox_status_retry (status, next_retry_at)
+      ) ENGINE=InnoDB
+    `);
+    this.outboxSchemaReady = true;
+  }
+
+  private computeBackoffSec(attempts: number): number {
+    return Math.min(300, 5 * Math.pow(2, Math.max(0, attempts - 1)));
+  }
+
+  private async enqueueOutbox(payload: MlLearnPayload, errorMsg: string): Promise<void> {
+    const nowMs = Date.now();
+    const backoffSec = this.computeBackoffSec(1);
+    this.pendingMlFeedback.set(payload.task_id, {
+      payload,
+      attempts: 1,
+      status: 'PENDING',
+      nextRetryAtMs: nowMs + backoffSec * 1000,
+      lastError: errorMsg,
+      queuedAt: new Date(nowMs).toISOString(),
+    });
+
+    if (store.mysqlPool && store.mysqlConnected) {
+      try {
+        await this.ensureOutboxSchema();
+        await store.mysqlPool.execute(
+          `INSERT INTO ml_learning_outbox (task_id, payload, status, attempts, next_retry_at, last_error)
+           VALUES (?, ?, 'PENDING', 1, DATE_ADD(NOW(), INTERVAL ? SECOND), ?)
+           ON DUPLICATE KEY UPDATE
+             payload = VALUES(payload),
+             status = 'PENDING',
+             attempts = attempts + 1,
+             next_retry_at = DATE_ADD(NOW(), INTERVAL ? SECOND),
+             last_error = VALUES(last_error)`,
+          [payload.task_id, JSON.stringify(payload), backoffSec, errorMsg.slice(0, 250), backoffSec]
+        );
+      } catch {
+        // Keep in-memory mirror if MySQL write fails transiently
+      }
+    }
   }
 
   private async sendMlLearnPayload(payload: MlLearnPayload): Promise<Record<string, unknown> | null> {
@@ -72,40 +169,102 @@ export class VerificationService {
     }
   }
 
+  private async markLearningCompleted(taskId: string): Promise<void> {
+    this.pendingMlFeedback.delete(taskId);
+    const task = store.taskMap.get(taskId);
+    if (task) {
+      task.online_model_updated = true;
+      store.taskMap.set(taskId, task);
+    }
+    if (store.mysqlPool && store.mysqlConnected) {
+      try {
+        await this.ensureOutboxSchema();
+        await store.mysqlPool.execute(
+          `UPDATE ml_learning_outbox SET status = 'COMPLETED', last_error = NULL WHERE task_id = ?`,
+          [taskId]
+        );
+        await store.mysqlPool.execute(
+          'UPDATE dispatch_tasks SET online_model_updated = ? WHERE id = ?',
+          [true, taskId]
+        );
+      } catch {
+        // Ignore transient DB error
+      }
+    }
+  }
+
   /**
-   * Replays queued verified-arrival observations that failed while the ML service
-   * was unreachable or restarting.
+   * Replays queued verified-arrival observations from the durable MySQL outbox
+   * (or in-memory mirror when running without MySQL) using exponential backoff
+   * and dead-lettering after MAX_OUTBOX_ATTEMPTS.
    */
-  public async flushPendingMlFeedback(): Promise<{ flushed: number; remaining: number }> {
+  public async flushPendingMlFeedback(options?: { ignoreBackoff?: boolean }): Promise<{
+    flushed: number;
+    remaining: number;
+    dead_letter: number;
+  }> {
     let flushed = 0;
-    for (const [taskId, item] of this.pendingMlFeedback.entries()) {
-      const result = await this.sendMlLearnPayload(item.payload);
-      if (result && (result.updated === true || result.reason === 'duplicate_task')) {
-        this.pendingMlFeedback.delete(taskId);
-        flushed += 1;
-        const task = store.taskMap.get(taskId);
-        if (task) {
-          task.online_model_updated = true;
-          store.taskMap.set(taskId, task);
-        }
-        if (store.mysqlPool && store.mysqlConnected) {
-          try {
-            await store.mysqlPool.execute(
-              'UPDATE dispatch_tasks SET online_model_updated = ? WHERE id = ?',
-              [true, taskId]
-            );
-          } catch {
-            // Ignore transient DB error
+    const nowMs = Date.now();
+    const ignoreBackoff = options?.ignoreBackoff === true;
+
+    if (store.mysqlPool && store.mysqlConnected) {
+      try {
+        await this.ensureOutboxSchema();
+        const dueSql = ignoreBackoff
+          ? `SELECT task_id, payload, attempts FROM ml_learning_outbox WHERE status = 'PENDING' ORDER BY next_retry_at ASC LIMIT 50`
+          : `SELECT task_id, payload, attempts FROM ml_learning_outbox WHERE status = 'PENDING' AND next_retry_at <= NOW() ORDER BY next_retry_at ASC LIMIT 50`;
+        const [rows] = await store.mysqlPool.query(dueSql);
+        for (const row of rows as Array<{ task_id: string; payload: string | MlLearnPayload; attempts: number }>) {
+          const payload: MlLearnPayload =
+            typeof row.payload === 'string' ? (JSON.parse(row.payload) as MlLearnPayload) : row.payload;
+          const result = await this.sendMlLearnPayload(payload);
+          if (result && (result.updated === true || result.reason === 'duplicate_task')) {
+            await this.markLearningCompleted(row.task_id);
+            flushed += 1;
+          } else {
+            const nextAttempts = Number(row.attempts) + 1;
+            if (nextAttempts >= MAX_OUTBOX_ATTEMPTS) {
+              await store.mysqlPool.execute(
+                `UPDATE ml_learning_outbox SET status = 'DEAD_LETTER', attempts = ?, last_error = ? WHERE task_id = ?`,
+                [nextAttempts, 'Max retry attempts exceeded', row.task_id]
+              );
+            } else {
+              const backoffSec = this.computeBackoffSec(nextAttempts);
+              await store.mysqlPool.execute(
+                `UPDATE ml_learning_outbox SET attempts = ?, next_retry_at = DATE_ADD(NOW(), INTERVAL ? SECOND), last_error = ? WHERE task_id = ?`,
+                [nextAttempts, backoffSec, 'ML engine unavailable', row.task_id]
+              );
+            }
           }
         }
+      } catch {
+        // Fall back to in-memory outbox flush if MySQL is temporarily unavailable
+      }
+    }
+
+    for (const [taskId, item] of this.pendingMlFeedback.entries()) {
+      if (item.status !== 'PENDING') continue;
+      if (!ignoreBackoff && item.nextRetryAtMs > nowMs) continue;
+      const result = await this.sendMlLearnPayload(item.payload);
+      if (result && (result.updated === true || result.reason === 'duplicate_task')) {
+        await this.markLearningCompleted(taskId);
+        flushed += 1;
       } else {
         item.attempts += 1;
-        if (item.attempts >= 50) {
-          this.pendingMlFeedback.delete(taskId);
+        item.lastError = 'ML engine unavailable';
+        if (item.attempts >= MAX_OUTBOX_ATTEMPTS) {
+          item.status = 'DEAD_LETTER';
+        } else {
+          item.nextRetryAtMs = nowMs + this.computeBackoffSec(item.attempts) * 1000;
         }
       }
     }
-    return { flushed, remaining: this.pendingMlFeedback.size };
+
+    return {
+      flushed,
+      remaining: this.getPendingMlFeedbackCount(),
+      dead_letter: this.getDeadLetterCount(),
+    };
   }
 
   /**
@@ -189,13 +348,11 @@ export class VerificationService {
     let onlineLearnResult: Record<string, unknown>;
     if (mlResponse) {
       onlineLearnResult = mlResponse;
-      this.pendingMlFeedback.delete(task.id);
+      if (mlResponse.updated === true || mlResponse.reason === 'duplicate_task') {
+        await this.markLearningCompleted(task.id);
+      }
     } else {
-      this.pendingMlFeedback.set(task.id, {
-        payload: mlPayload,
-        attempts: 1,
-        queuedAt: now.toISOString(),
-      });
+      await this.enqueueOutbox(mlPayload, 'ML engine unavailable');
       onlineLearnResult = {
         updated: false,
         queued_for_retry: true,

@@ -194,13 +194,39 @@ test('verificationService queues failed ML feedback and flushes when ML engine r
 
     process.env.ML_SERVICE_TOKEN = 'test-ml-token';
     svc.mlEngineUrl = `http://127.0.0.1:${port}`;
-    const flushed = await svc.flushPendingMlFeedback();
+    const flushed = await svc.flushPendingMlFeedback({ ignoreBackoff: true });
     assert.ok(flushed.flushed >= 1);
     assert.equal(flushed.remaining, 0);
     assert.equal(receivedToken, 'test-ml-token');
     assert.equal(store.taskMap.get(dispatched.task.id)?.online_model_updated, true);
   } finally {
     svc.mlEngineUrl = originalUrl;
+    if (originalToken === undefined) {
+      delete process.env.ML_SERVICE_TOKEN;
+    } else {
+      process.env.ML_SERVICE_TOKEN = originalToken;
+    }
+  }
+});
+
+test('public /v1/ml/status is redacted and /v1/ml/diagnostics requires ML_SERVICE_TOKEN', async (t) => {
+  const originalToken = process.env.ML_SERVICE_TOKEN;
+  process.env.ML_SERVICE_TOKEN = 'diag-secret-token';
+  const server = app.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  await once(server, 'listening');
+  const { port } = server.address() as AddressInfo;
+
+  try {
+    const publicRes = await fetch(`http://127.0.0.1:${port}/v1/ml/status`);
+    assert.equal(publicRes.status, 200);
+    const publicBody = (await publicRes.json()) as Record<string, unknown>;
+    assert.equal('postcode_residual_biases_sec' in publicBody, false);
+    assert.equal('drift_monitoring' in publicBody, false);
+
+    const unauthDiag = await fetch(`http://127.0.0.1:${port}/v1/ml/diagnostics`);
+    assert.equal(unauthDiag.status, 401);
+  } finally {
     if (originalToken === undefined) {
       delete process.env.ML_SERVICE_TOKEN;
     } else {

@@ -138,6 +138,36 @@ class OnlineLearningReliabilityTests(unittest.TestCase):
             self.assertTrue(status["promotion_gate"]["blocked_by_drift"])
             self.assertGreater(status["drift_monitoring"]["rolling_p90_abs_error_sec"], 50.0)
 
+    def test_public_health_is_redacted_and_feature_drift_and_promotion_manifest(self):
+        client = TestClient(app)
+        health = client.get("/v1/health")
+        self.assertEqual(health.status_code, 200)
+        ml_public = health.json()["ml_engine"]
+        self.assertNotIn("postcode_residual_biases_sec", ml_public)
+        self.assertNotIn("drift_monitoring", ml_public)
+
+        with tempfile.TemporaryDirectory() as td:
+            manifest_path = Path(td) / "promotion_gate.json"
+            manifest_path.write_text(
+                '{"evaluated_at":"2026-11-18T22:00:00Z","dataset":"VERIFIED_FIELD_ARRIVALS",'
+                '"chronological_holdout_records":35,"results":{"model_improves_mae":true}}',
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {
+                "ML_STATE_PATH": "",
+                "ML_PROMOTION_GATE_PATH": str(manifest_path),
+                "ML_FEATURE_DRIFT_Z_THRESHOLD": "1.5",
+            }):
+                engine = HybridChampionChallengerEngine()
+                self.assertTrue(engine.get_status()["promotion_gate"]["eligible_for_production_ml"])
+                drifted_candidate = dict(CANDIDATE, rain_mm=450.0, active_load=90)
+                for _ in range(20):
+                    engine.score_candidates("FC-02-A09-DB-09", [drifted_candidate])
+                status = engine.get_status()
+                self.assertTrue(status["drift_monitoring"]["feature_drift"]["feature_drift_alert"])
+                self.assertIn("rain_mm", status["drift_monitoring"]["feature_drift"]["drifted_features"])
+                self.assertFalse(status["promotion_gate"]["eligible_for_production_ml"])
+
 
 if __name__ == "__main__":
     unittest.main()

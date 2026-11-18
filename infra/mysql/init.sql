@@ -127,6 +127,19 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   INDEX idx_outbox_unprocessed (processed, created_at)
 ) ENGINE=InnoDB;
 
+-- 6b. Durable ML Online-Learning Outbox (Retry Scheduling + Dead-Letter Queue)
+CREATE TABLE IF NOT EXISTS ml_learning_outbox (
+  task_id VARCHAR(128) PRIMARY KEY,
+  payload JSON NOT NULL,
+  status ENUM('PENDING', 'COMPLETED', 'DEAD_LETTER') NOT NULL DEFAULT 'PENDING',
+  attempts INT NOT NULL DEFAULT 0,
+  next_retry_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_error VARCHAR(255) DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_ml_outbox_status_retry (status, next_retry_at)
+) ENGINE=InnoDB;
+
 -- 7. Cryptographically Signed KYC Proof-of-Location Verifications
 CREATE TABLE IF NOT EXISTS kyc_verifications (
   id VARCHAR(64) PRIMARY KEY,

@@ -1,4 +1,5 @@
 from collections import deque
+import json
 import math
 import os
 import tempfile
@@ -46,7 +47,13 @@ class HybridChampionChallengerEngine:
         self._seen_task_order: deque[str] = deque()
         self._seen_task_ids: set[str] = set()
         self._drift_mae_threshold_sec = float(os.getenv("ML_DRIFT_MAE_THRESHOLD_SEC", "180.0"))
+        self._feature_drift_z_threshold = float(os.getenv("ML_FEATURE_DRIFT_Z_THRESHOLD", "2.5"))
         self._min_verified_arrivals_for_gate = int(os.getenv("ML_MIN_VERIFIED_ARRIVALS", "30"))
+        self._promotion_gate_path = Path(
+            os.getenv("ML_PROMOTION_GATE_PATH")
+            or (Path(__file__).resolve().parent / "promotion_gate.json")
+        )
+        self._recent_features: deque[List[float]] = deque(maxlen=200)
         self.online_samples_learned: int = 0
         self.learning_rate: float = 0.08
         self.postcode_residual_ema: Dict[str, float] = {}
@@ -177,6 +184,8 @@ class HybridChampionChallengerEngine:
         X = np.array([self._extract_feature_row(c) for c in candidates])
         if not np.isfinite(X).all():
             raise ValueError("ETA features must be finite numeric values")
+        for row in X:
+            self._recent_features.append(row.tolist())
 
         # 1. Champion Model Predictions (GBDT Regressor)
         if self._experimental_eta_enabled and self.champion_model is not None:
@@ -267,6 +276,7 @@ class HybridChampionChallengerEngine:
                 self._seen_task_order.append(task_id)
                 self._seen_task_ids.add(task_id)
             self.online_samples_learned += 1
+            self._recent_features.append(list(row))
             self.recent_residuals.append(residual)
             self.recent_residuals = self.recent_residuals[-100:]
             mae = float(np.mean(np.abs(self.recent_residuals)))
@@ -285,6 +295,63 @@ class HybridChampionChallengerEngine:
                 "update_latency_ms": round((time.perf_counter() - t0) * 1000, 3),
             }
 
+    def _compute_feature_drift(self) -> Dict[str, Any]:
+        sample_count = len(self._recent_features)
+        if sample_count == 0 or not hasattr(self.scaler, "mean_") or not hasattr(self.scaler, "scale_"):
+            return {
+                "sample_count": sample_count,
+                "max_feature_z_shift": None,
+                "drifted_features": [],
+                "z_threshold": self._feature_drift_z_threshold,
+                "feature_drift_alert": False,
+            }
+        recent_matrix = np.array(self._recent_features, dtype=float)
+        recent_mean = np.mean(recent_matrix, axis=0)
+        safe_scale = np.where(self.scaler.scale_ > 1e-6, self.scaler.scale_, 1.0)
+        z_shifts = np.abs(recent_mean - self.scaler.mean_) / safe_scale
+        drifted = [
+            FEATURE_NAMES[idx]
+            for idx, z in enumerate(z_shifts)
+            if float(z) > self._feature_drift_z_threshold
+        ]
+        max_z = float(np.max(z_shifts))
+        return {
+            "sample_count": sample_count,
+            "max_feature_z_shift": round(max_z, 3),
+            "drifted_features": drifted,
+            "z_threshold": self._feature_drift_z_threshold,
+            "feature_drift_alert": bool(sample_count >= 20 and len(drifted) > 0),
+        }
+
+    def _load_promotion_manifest(self) -> Optional[Dict[str, Any]]:
+        if not self._promotion_gate_path.exists():
+            return None
+        try:
+            data = json.loads(self._promotion_gate_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    def get_public_status(self) -> Dict[str, Any]:
+        """Redacted status safe for unauthenticated UI / health checks (no postcode biases or internal paths)."""
+        recent_mae = float(np.mean(np.abs(self.recent_residuals))) if self.recent_residuals else None
+        manifest = self._load_promotion_manifest()
+        validated_on_real = bool(
+            manifest
+            and manifest.get("dataset") == "VERIFIED_FIELD_ARRIVALS"
+            and int(manifest.get("chronological_holdout_records", 0)) >= self._min_verified_arrivals_for_gate
+        )
+        return {
+            "champion_model": "Synthetic-data ETA baseline (scikit-learn gradient boosting)",
+            "champion_training_data": "SYNTHETIC_SIMULATION",
+            "validated_on_real_arrivals": validated_on_real,
+            "active_eta_strategy": "EXPERIMENTAL_SYNTHETIC_ML" if self._experimental_eta_enabled else "DETERMINISTIC_BASELINE",
+            "challenger_model": "Scaled online SGDRegressor + postcode EMA",
+            "online_samples_learned": self.online_samples_learned,
+            "rolling_mae_sec": round(recent_mae, 2) if recent_mae is not None else None,
+            "feature_importances": self.feature_importances,
+        }
+
     def get_status(self) -> Dict[str, Any]:
         # IMPORTANT: synthetic fit scores are not real delivery accuracy.
         recent_mae = float(np.mean(np.abs(self.recent_residuals))) if self.recent_residuals else None
@@ -296,10 +363,24 @@ class HybridChampionChallengerEngine:
             and recent_mae is not None
             and recent_mae > self._drift_mae_threshold_sec
         )
+        feature_drift = self._compute_feature_drift()
+        manifest = self._load_promotion_manifest()
+        manifest_passed = bool(
+            manifest
+            and manifest.get("dataset") == "VERIFIED_FIELD_ARRIVALS"
+            and int(manifest.get("chronological_holdout_records", 0)) >= self._min_verified_arrivals_for_gate
+            and manifest.get("results", {}).get("model_improves_mae") is True
+        )
+        blocked_by_drift = drift_alert or feature_drift["feature_drift_alert"]
+        eligible_for_production_ml = manifest_passed and not blocked_by_drift
         return {
             "champion_model": "Synthetic-data ETA baseline (scikit-learn gradient boosting)",
             "champion_training_data": "SYNTHETIC_SIMULATION",
-            "validated_on_real_arrivals": False,
+            "validated_on_real_arrivals": bool(
+                manifest
+                and manifest.get("dataset") == "VERIFIED_FIELD_ARRIVALS"
+                and int(manifest.get("chronological_holdout_records", 0)) >= self._min_verified_arrivals_for_gate
+            ),
             "experimental_eta_enabled": self._experimental_eta_enabled,
             "active_eta_strategy": "EXPERIMENTAL_SYNTHETIC_ML" if self._experimental_eta_enabled else "DETERMINISTIC_BASELINE",
             "synthetic_fit": {
@@ -320,13 +401,17 @@ class HybridChampionChallengerEngine:
                 "rolling_bias_sec": round(recent_bias, 2) if recent_bias is not None else None,
                 "drift_threshold_mae_sec": self._drift_mae_threshold_sec,
                 "drift_alert": drift_alert,
+                "feature_drift": feature_drift,
             },
             "promotion_gate": {
-                "eligible_for_production_ml": False,
+                "eligible_for_production_ml": eligible_for_production_ml,
+                "decision_version": manifest.get("evaluated_at") if manifest else None,
+                "manifest_present": manifest is not None,
+                "manifest_passed": manifest_passed,
                 "min_verified_arrivals_for_gate": self._min_verified_arrivals_for_gate,
                 "observed_verified_arrivals": self.online_samples_learned,
                 "requires_chronological_field_eval": True,
-                "blocked_by_drift": drift_alert,
+                "blocked_by_drift": blocked_by_drift,
             },
             "online_state_persistence_configured": self._state_path is not None,
             "online_state_persisted": self._saved_state,

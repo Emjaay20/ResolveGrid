@@ -282,7 +282,19 @@ app.get('/v1/ml/status', async (_req: Request, res: Response) => {
     clearTimeout(timer);
     if (!response.ok) throw new Error('ML engine unavailable');
     const payload = (await response.json()) as { ml_engine?: Record<string, unknown> };
-    res.json({ available: true, ...(payload.ml_engine || {}) });
+    const ml = payload.ml_engine || {};
+    // Public status is intentionally redacted: never expose postcode-level biases or internal state.
+    res.json({
+      available: true,
+      champion_model: ml.champion_model ?? 'ETA baseline',
+      champion_training_data: ml.champion_training_data ?? 'SYNTHETIC_SIMULATION',
+      validated_on_real_arrivals: ml.validated_on_real_arrivals ?? false,
+      active_eta_strategy: ml.active_eta_strategy ?? 'DETERMINISTIC_BASELINE',
+      challenger_model: ml.challenger_model ?? 'Online residual learner',
+      online_samples_learned: ml.online_samples_learned ?? 0,
+      rolling_mae_sec: ml.rolling_mae_sec ?? null,
+      feature_importances: ml.feature_importances ?? {},
+    });
   } catch {
     clearTimeout(timer);
     res.json({
@@ -293,6 +305,39 @@ app.get('/v1/ml/status', async (_req: Request, res: Response) => {
       rolling_mae_sec: null,
       feature_importances: {},
     });
+  }
+});
+
+app.get('/v1/ml/diagnostics', async (req: Request, res: Response) => {
+  const expected = process.env.ML_SERVICE_TOKEN?.trim() || '';
+  if (!expected) {
+    res.status(503).json({ error: 'ML diagnostics authentication is not configured.' });
+    return;
+  }
+  const provided = req.header('X-ML-Service-Token') || '';
+  const expectedBuf = Buffer.from(expected, 'utf8');
+  const providedBuf = Buffer.from(provided, 'utf8');
+  if (expectedBuf.length !== providedBuf.length || !crypto.timingSafeEqual(expectedBuf, providedBuf)) {
+    res.status(401).json({ error: 'Invalid ML service credential.' });
+    return;
+  }
+
+  const mlEngineUrl = (process.env.ML_ENGINE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+  const outbox = await verificationService.getOutboxSummary();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const response = await fetch(`${mlEngineUrl}/v1/ml/status`, {
+      headers: { 'X-ML-Service-Token': expected },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) throw new Error('ML engine unavailable');
+    const mlStatus = (await response.json()) as Record<string, unknown>;
+    res.json({ available: true, ml_engine: mlStatus, outbox });
+  } catch {
+    clearTimeout(timer);
+    res.status(502).json({ available: false, error: 'ML engine unavailable', outbox });
   }
 });
 

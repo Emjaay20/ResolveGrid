@@ -71,7 +71,7 @@ async def health() -> Dict[str, Any]:
         "service": "resolvegrid-ml-engine",
         "version": "1.0.0",
         "llm_providers": resolver_agent.get_configured_providers(),
-        "ml_engine": eta_engine.get_status(),
+        "ml_engine": eta_engine.get_public_status(),
     }
 
 
