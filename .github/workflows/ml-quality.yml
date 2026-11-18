@@ -49,3 +49,16 @@ jobs:
         run: pnpm --filter @resolvegrid/shared build && pnpm --filter @resolvegrid/api build
       - name: Run Node gateway tests
         run: pnpm test
+
+  compose-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose with disposable CI-only credentials
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-root-password
+          MYSQL_PASSWORD: ci-only-user-password
+          ML_SERVICE_TOKEN: ci-only-machine-to-machine-secret
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
